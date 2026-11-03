@@ -1,0 +1,14 @@
+# checker.cpp
+
+```cpp
+#include "stress/judge.hpp"
+
+void judge(Judge& j) {
+    long long n = j.in.read_int();
+    long long x = j.out.read_int(1, n);   // 形式違反・範囲外は自動で WA
+    j.ensure(x % 2 == 0, "x must be even");
+    j.out.expect_eof();
+}
+```
+
+`./checker <input> <output> [reference]`、終了コード 0 = AC, 1 = WA, 3 = checker の失敗。今までの `checker in out` 形式の checker もそのまま使える。

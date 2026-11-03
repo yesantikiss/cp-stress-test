@@ -2,18 +2,19 @@
 """競プロ用ランダムテストのドライバ。
 
 カレントディレクトリ（普段は ~/atcoder）の main.cpp / guchoku.cpp / gen.cpp を
-ビルドして、gen の出力で main と guchoku を比べる。-c で checker モード。
+ビルドして、gen の出力で main と guchoku を比べる。-c で checker モード、-i でインタラクティブ。
 
   st                      # 1000 回
   st -n 5000 --seed 42
   st -t 60                # 60 秒
   st -c checker.cpp       # スペシャルジャッジ
+  st -i interactor.cpp    # インタラクティブ
   st -g max -g all_same  # STRESS_GEN の生成器を絞る
   st repro 12345:7:gen    # 失敗ケースを 1 つ再現（seed:cap:生成器）
   st make max -n 5 -o cases/   # 入力ファイルだけ書き出す
   st bench max            # 最大ケースで main の実行時間を測る
   st last [--to-in]       # 直前の失敗を表示（in.txt へコピー）
-  st init                 # gen.cpp などの雛形を置く
+  st init [-c] [-i]       # gen.cpp などの雛形を置く
   st clean                # 保存した失敗ケースを消す
 
 終了コード: 0 = 全部 OK, 1 = 失敗を見つけた, 2 = ビルドや引数のエラー
@@ -31,7 +32,9 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -272,9 +275,10 @@ def compare(a: bytes, b: bytes, mode: str) -> tuple[bool, str]:
 
 @dataclass
 class Verdict:
-    kind: str          # OK / WA / RE / TLE / REF_RE / REF_TLE / CHECKER_FAIL / GEN_FAIL
+    kind: str          # OK / WA / RE / TLE / REF_RE / REF_TLE / CHECKER_FAIL / INTERACTOR_FAIL / GEN_FAIL
     detail: str = ""
     elapsed: float = 0.0
+    queries: tuple[int, int] | None = None  # インタラクティブ: (使った回数, 制限 or -1)
 
 
 @dataclass
@@ -283,6 +287,7 @@ class Programs:
     main: Path | None
     ref: Path | None
     checker: Path | None
+    interactor: Path | None = None
     gens: list[str] = field(default_factory=list)  # 生成器の名前
     big: set[str] = field(default_factory=set)     # STRESS_BIG の生成器
 
@@ -335,6 +340,8 @@ def run_case(progs: Programs, case: Case, d: Path, opt: argparse.Namespace) -> V
     inp = d / "in.txt"
     if (bad := generate(progs, case, d, opt)) is not None:
         return bad
+    if progs.interactor:
+        return run_interactive(progs, d, opt)
 
     m = run(progs.main, inp, d / "out_main.txt", d / "stderr_main.txt", opt.tl, d)
     if m.status == "TLE":
@@ -367,6 +374,177 @@ def run_case(progs: Programs, case: Case, d: Path, opt: argparse.Namespace) -> V
     return Verdict("OK" if ok else "WA", why, m.elapsed)
 
 
+# ---------------------------------------------------------------- インタラクティブ
+
+
+class Transcript:
+    """main と interactor のやり取りを行単位で記録する。長すぎるときは先頭と末尾だけ残す。"""
+
+    HEAD, TAIL, WIDTH = 5000, 5000, 2000
+
+    def __init__(self) -> None:
+        self.head: list[str] = []
+        self.tail: deque[str] = deque(maxlen=self.TAIL)
+        self.dropped = 0
+        self.partial = {">": b"", "<": b""}
+        self.last = ""  # 最後に記録した行の向き
+        self.lock = threading.Lock()
+
+    def _line(self, mark: str, text: str) -> None:
+        if len(text) > self.WIDTH:
+            text = text[:self.WIDTH] + f" ... (+{len(text) - self.WIDTH} chars)"
+        self.last = mark
+        line = f"{mark} {text}"
+        if len(self.head) < self.HEAD:
+            self.head.append(line)
+            return
+        if len(self.tail) == self.TAIL:
+            self.dropped += 1
+        self.tail.append(line)
+
+    def feed(self, mark: str, data: bytes) -> None:
+        with self.lock:
+            *lines, rest = (self.partial[mark] + data).split(b"\n")
+            for ln in lines:
+                self._line(mark, ln.decode(errors="replace").rstrip("\r"))
+            self.partial[mark] = rest
+
+    def finish(self, mark: str) -> None:
+        with self.lock:
+            if self.partial[mark]:
+                self._line(mark, self.partial[mark].decode(errors="replace") + "  (no newline)")
+                self.partial[mark] = b""
+
+    def note(self, text: str) -> None:
+        with self.lock:
+            line = f"# {text}"
+            (self.head if len(self.head) < self.HEAD else self.tail).append(line)
+
+    def lines(self) -> list[str]:
+        mid = [f"... ({self.dropped} lines omitted) ..."] if self.dropped else []
+        return self.head + mid + list(self.tail)
+
+
+def _pump(src, dst, mark: str, log: Transcript) -> None:
+    """src を読んで記録し、dst に流す。src が閉じたら dst も閉じる。"""
+    fd = src.fileno()
+    while True:
+        try:
+            data = os.read(fd, 1 << 16)
+        except OSError:
+            data = b""
+        if not data:
+            break
+        log.feed(mark, data)
+        if dst is not None:
+            try:
+                dst.write(data)
+                dst.flush()
+            except (BrokenPipeError, OSError):
+                dst = None  # 相手はもう読まない。記録だけ続ける
+    log.finish(mark)
+    for f in (src, dst):
+        if f is not None:
+            try:
+                f.close()
+            except OSError:
+                pass
+
+
+def _kill(p: subprocess.Popen) -> None:
+    try:
+        os.killpg(p.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def run_interactive(progs: Programs, d: Path, opt: argparse.Namespace) -> Verdict:
+    """main と interactor の間に st が入って中継する。やり取りは d/transcript.txt に残る。"""
+    report = d / "report_interactor.txt"
+    env = dict(os.environ, STRESS_REPORT=str(report))
+    log = Transcript()
+    with open(d / "stderr_main.txt", "wb") as em, open(d / "stderr_interactor.txt", "wb") as ei:
+        start = time.perf_counter()
+        main = subprocess.Popen([str(progs.main)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=em,
+                                cwd=d, start_new_session=True)
+        inter = subprocess.Popen([str(progs.interactor), str(d / "in.txt")], stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=ei, cwd=d, start_new_session=True, env=env)
+    pumps = [threading.Thread(target=_pump, args=(main.stdout, inter.stdin, ">", log), daemon=True),
+             threading.Thread(target=_pump, args=(inter.stdout, main.stdin, "<", log), daemon=True)]
+    for t in pumps:
+        t.start()
+
+    # どちらが先に終わったかで判定が変わるので、終了を見つけた順番を記録する
+    main_end = inter_end = None  # 何回目のポーリングで終了を見つけたか
+    main_killed = main_tle = inter_tle = False
+    main_time = 0.0
+    tick = 0
+    while main_end is None or inter_end is None:
+        tick += 1
+        now = time.perf_counter()
+        if main_end is None and main.poll() is not None:
+            main_end, main_time = tick, now - start
+        if inter_end is None and inter.poll() is not None:
+            inter_end = tick
+        if main_end is None:
+            if now - start > opt.tl:
+                main_tle = True
+                _kill(main)
+                main.wait()
+                main_end, main_time = tick, now - start
+            elif inter_end is not None and inter.returncode != 0:
+                main_killed = True  # interactor が WA / 失敗で終わったら main は待たない
+                _kill(main)
+                main.wait()
+                main_end, main_time = tick, now - start
+        if inter_end is None:
+            if now - start > opt.checker_tl:
+                inter_tle = True
+                _kill(inter)
+                inter.wait()
+                inter_end = tick
+            elif main_end is not None and (main_tle or main.returncode != 0):
+                _kill(inter)  # main が落ちたら interactor は待たない
+                inter.wait()
+                inter_end = tick
+        if main_end is None or inter_end is None:
+            time.sleep(0.0005 if now - start < 0.05 else 0.002)
+    for p in (main, inter):
+        _kill(p)  # 子プロセスが残っていてもパイプが閉じるように
+    for t in pumps:
+        t.join(timeout=5)
+
+    msg = (d / "stderr_interactor.txt").read_text(errors="replace").strip()
+    last_msg = msg.splitlines()[-1] if msg else ""
+    mc, ic = main.returncode, inter.returncode
+    if main_tle:
+        hint = "  (main が応答していない。flush 忘れ？)" if log.last in ("<", "") else ""
+        v = Verdict("TLE", f"main exceeded {opt.tl}s{hint}", main_time)
+    elif mc != 0 and not main_killed and main_end <= inter_end:
+        v = Verdict("RE", f"main: {describe_code(mc)}", main_time)
+    elif inter_tle:
+        v = Verdict("INTERACTOR_FAIL", f"interactor exceeded {opt.checker_tl}s", main_time)
+    elif ic == 1:
+        v = Verdict("WA", last_msg[4:] if last_msg.startswith("WA: ") else last_msg or "interactor exit 1", main_time)
+    elif ic != 0:
+        v = Verdict("INTERACTOR_FAIL", f"{describe_code(ic)} {msg}".strip(), main_time)
+    elif mc != 0:
+        v = Verdict("RE", f"main: {describe_code(mc)}", main_time)
+    else:
+        v = Verdict("OK", "", main_time)
+    if main_tle:
+        log.note(f"[st] main killed after {opt.tl}s")
+    elif v.kind == "RE":
+        log.note(f"[st] main: {describe_code(mc)}")
+    elif v.kind != "OK" and last_msg:
+        log.note(f"[interactor] {last_msg}")
+    (d / "transcript.txt").write_text("\n".join(log.lines()) + "\n")
+    if report.exists():
+        info = dict(ln.split(None, 1) for ln in report.read_text().splitlines() if ln.strip())
+        v.queries = (int(info.get("queries", 0)), int(info.get("limit", -1)))
+    return v
+
+
 # ---------------------------------------------------------------- 失敗の保存と表示
 
 
@@ -386,8 +564,8 @@ def save_failure(workdir: Path, run_dir: Path, case: Case, v: Verdict, opt: argp
         "cap": case.cap,
         "gen": case.name,
         "case": case.id,
-        "repro": f"st repro {case.id}" + (f" -c {opt.checker}" if opt.checker else ""),
-        "mode": "checker" if opt.checker else "compare",
+        "repro": f"st repro {case.id}" + judge_flags(opt),
+        "mode": mode_name(opt),
         "cmp": opt.cmp,
         "tl": opt.tl,
         "sources": {k: {"path": str(p), "sha1": hashlib.sha1(p.read_bytes()).hexdigest()} for k, p in sources.items()},
@@ -401,6 +579,18 @@ def save_failure(workdir: Path, run_dir: Path, case: Case, v: Verdict, opt: argp
     return dest
 
 
+def judge_flags(opt: argparse.Namespace) -> str:
+    if getattr(opt, "interactor", None):
+        return f" -i {opt.interactor}"
+    return f" -c {opt.checker}" if opt.checker else ""
+
+
+def mode_name(opt: argparse.Namespace) -> str:
+    if getattr(opt, "interactor", None):
+        return "interactive"
+    return "checker" if opt.checker else "compare"
+
+
 def head(path: Path, lines: int = 20, width: int = 200) -> str:
     if not path.exists():
         return Out.dim("(none)")
@@ -411,18 +601,31 @@ def head(path: Path, lines: int = 20, width: int = 200) -> str:
     return "\n".join(shown) if shown else Out.dim("(empty)")
 
 
+def head_tail(path: Path, lines: int = 20, width: int = 200) -> str:
+    """長いときは最初と最後を lines 行ずつ。インタラクティブの失敗はたいてい最後の方にある。"""
+    text = path.read_text(errors="replace").splitlines()
+    if len(text) <= 2 * lines:
+        return head(path, 2 * lines, width)
+    cut = [ln if len(ln) <= width else ln[:width] + Out.dim(" ...") for ln in text]
+    return "\n".join(cut[:lines] + [Out.dim(f"... ({len(text) - 2 * lines} lines) ...")] + cut[-lines:])
+
+
 def show_failure(d: Path, v: Verdict, case_id: str, repro: str, workdir: Path) -> None:
     Out.log()
     Out.log(Out.red(f"{v.kind}") + f"  {v.detail}")
     Out.log(Out.dim(f"case={case_id}  ->  {repro}"))
     Out.log(Out.yellow("---- input ----"))
     Out.log(head(d / "in.txt"))
-    Out.log(Out.yellow("---- main ----"))
-    Out.log(head(d / "out_main.txt"))
+    if (d / "transcript.txt").exists():
+        Out.log(Out.yellow("---- transcript ----") + Out.dim("  (< interactor -> main, > main -> interactor)"))
+        Out.log(head_tail(d / "transcript.txt"))
+    else:
+        Out.log(Out.yellow("---- main ----"))
+        Out.log(head(d / "out_main.txt"))
     if (d / "out_ref.txt").exists():
         Out.log(Out.yellow("---- guchoku ----"))
         Out.log(head(d / "out_ref.txt"))
-    for name in ("stderr_main.txt", "stderr_ref.txt", "stderr_checker.txt"):
+    for name in ("stderr_main.txt", "stderr_ref.txt", "stderr_checker.txt", "stderr_interactor.txt"):
         p = d / name
         if p.exists() and p.stat().st_size:
             Out.log(Out.yellow(f"---- {name} ----"))
@@ -474,7 +677,9 @@ def prepare(opt: argparse.Namespace, workdir: Path, need: set[str]) -> tuple[Pro
     if "main" in need:
         sources["main"] = find_source(workdir, opt.main, "solution")
     if "judge" in need:
-        if opt.checker:
+        if getattr(opt, "interactor", None):
+            sources["interactor"] = find_source(workdir, opt.interactor, "interactor")
+        elif opt.checker:
             sources["checker"] = find_source(workdir, opt.checker, "checker")
             if opt.ref:
                 sources["ref"] = find_source(workdir, opt.guchoku, "reference (guchoku)")
@@ -485,7 +690,7 @@ def prepare(opt: argparse.Namespace, workdir: Path, need: set[str]) -> tuple[Pro
     t0 = time.perf_counter()
     try:
         with ThreadPoolExecutor(max_workers=len(sources)) as ex:
-            # gen / checker は ACL を使わないことが多いので PCH なし
+            # gen / checker / interactor は ACL を使わないことが多いので PCH なし
             jobs = {key: ex.submit(build, cfg, src, key, key in ("main", "ref")) for key, src in sources.items()}
             exes = {k: f.result() for k, f in jobs.items()}
     except BuildError:
@@ -499,7 +704,7 @@ def prepare(opt: argparse.Namespace, workdir: Path, need: set[str]) -> tuple[Pro
         die(f"{opt.gen_file}: could not list generators")
     rows = [line.split() for line in listed.stdout.splitlines() if line.strip()]
     progs = Programs(gen=exes["gen"], main=exes.get("main"), ref=exes.get("ref"),
-                     checker=exes.get("checker"), gens=[r[0] for r in rows],
+                     checker=exes.get("checker"), interactor=exes.get("interactor"), gens=[r[0] for r in rows],
                      big={r[0] for r in rows if "big" in r[1:]})
     return progs, sources
 
@@ -524,7 +729,23 @@ def select_gens(progs: Programs, wanted: list[str] | None, big: bool) -> list[st
 # ---------------------------------------------------------------- コマンド
 
 
+def fmt_queries(q: tuple[int, int] | None) -> str:
+    if not q:
+        return ""
+    return f"  max queries {q[0]}" + (f"/{q[1]}" if q[1] >= 0 else "")
+
+
+def check_mode(opt: argparse.Namespace) -> None:
+    if opt.interactor:
+        bad = [f for f, on in (("-c", opt.checker), ("--ref", opt.ref), ("--cmp", opt.cmp is not None)) if on]
+        if bad:
+            die(f"-i と {', '.join(bad)} は一緒に使えない")
+    if opt.cmp is None:
+        opt.cmp = "token"
+
+
 def cmd_run(opt: argparse.Namespace) -> int:
+    check_mode(opt)
     workdir = Path.cwd()
     progs, sources = prepare(opt, workdir, {"main", "judge"})
     gens = select_gens(progs, opt.gens, big=False)
@@ -533,10 +754,11 @@ def cmd_run(opt: argparse.Namespace) -> int:
     start = time.monotonic()
     deadline = start + opt.time if opt.time else math.inf
     total = opt.iters if not opt.time else None
-    mode = "checker" if opt.checker else f"compare/{opt.cmp}"
+    mode = mode_name(opt) if mode_name(opt) != "compare" else f"compare/{opt.cmp}"
     Out.log(Out.dim(f"mode={mode} gens={','.join(gens)} base_seed={base} tl={opt.tl}s"))
 
     slowest = 0.0
+    most_queries: tuple[int, int] | None = None
     k = 0
     last_status = 0.0
     while (total is None or k < total) and time.monotonic() < deadline:
@@ -544,16 +766,19 @@ def cmd_run(opt: argparse.Namespace) -> int:
         case = Case(case_seed(base, k), cap_for(k // len(gens), opt.max_cap), gens[k % len(gens)])
         v = run_case(progs, case, run_dir, opt)
         slowest = max(slowest, v.elapsed)
+        if v.queries and (most_queries is None or v.queries[0] > most_queries[0]):
+            most_queries = v.queries
         k += 1
         now = time.monotonic()
         if now - last_status > 0.1:
             prog = f"{k}/{total}" if total else f"{k}"
-            Out.status(f"[{prog}] cap={case.cap} OK  max {slowest * 1000:.0f}ms  {now - start:.1f}s")
+            Out.status(f"[{prog}] cap={case.cap} OK  max {slowest * 1000:.0f}ms{fmt_queries(most_queries)}"
+                       f"  {now - start:.1f}s")
             last_status = now
         if v.kind == "OK":
             continue
 
-        if v.kind in ("GEN_FAIL", "CHECKER_FAIL"):
+        if v.kind in ("GEN_FAIL", "CHECKER_FAIL", "INTERACTOR_FAIL"):
             Out.log(Out.red(v.kind) + f"  {v.detail}")
             Out.log(Out.dim(f"case={case.id}"))
             return EXIT_ERROR
@@ -579,12 +804,14 @@ def cmd_run(opt: argparse.Namespace) -> int:
         Out.log(Out.dim(f"found after {k} cases ({time.monotonic() - start:.1f}s)"))
         return EXIT_FOUND
 
-    Out.log(Out.green("OK") + f"  {k} cases  max {slowest * 1000:.0f}ms  {time.monotonic() - start:.1f}s"
+    Out.log(Out.green("OK") + f"  {k} cases  max {slowest * 1000:.0f}ms{fmt_queries(most_queries)}"
+            f"  {time.monotonic() - start:.1f}s"
             + Out.dim(f"  base_seed={base}"))
     return EXIT_OK
 
 
 def cmd_repro(opt: argparse.Namespace) -> int:
+    check_mode(opt)
     workdir = Path.cwd()
     progs, sources = prepare(opt, workdir, {"main", "judge"})
     case = Case.parse(opt.case, progs.gens)
@@ -698,7 +925,7 @@ def cmd_clean(opt: argparse.Namespace) -> int:
 
 def cmd_init(opt: argparse.Namespace) -> int:
     workdir = Path.cwd()
-    names = ["gen.cpp"] + (["checker.cpp"] if opt.checker else [])
+    names = ["gen.cpp"] + (["checker.cpp"] if opt.checker else []) + (["interactor.cpp"] if opt.interactor else [])
     for name in names:
         src = TOOL_ROOT / "templates" / name
         dst = workdir / (opt.name if opt.name and len(names) == 1 else name)
@@ -726,10 +953,11 @@ def add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--guchoku", default="guchoku.cpp", help="愚直解 (default: guchoku.cpp)")
     p.add_argument("-c", "--checker", metavar="SRC", help="checker モード（例: -c checker.cpp）")
     p.add_argument("--ref", action="store_true", help="checker モードでも愚直解を走らせ、出力を第 3 引数で渡す")
+    p.add_argument("-i", "--interactor", metavar="SRC", help="インタラクティブ（例: -i interactor.cpp）。愚直解は使わない")
     p.add_argument("--tl", type=float, default=2.0, help="main の制限時間 [s] (default: 2)")
     p.add_argument("--ref-tl", type=float, default=10.0, help="愚直解の制限時間 [s] (default: 10)")
     p.add_argument("--checker-tl", type=float, default=10.0, help=argparse.SUPPRESS)
-    p.add_argument("--cmp", default="token", help="比較方法: token (default) / exact / float[:EPS]")
+    p.add_argument("--cmp", default=None, help="比較方法: token (default) / exact / float[:EPS]")
 
 
 def add_cases(p: argparse.ArgumentParser, count: int) -> None:
@@ -780,8 +1008,9 @@ def parse(argv: list[str]) -> argparse.Namespace:
     p = sub.add_parser("clean", help=".stress/ の失敗ケースを消す")
     p.add_argument("--all", action="store_true", help="ビルド済みバイナリも消す")
 
-    p = sub.add_parser("init", help="gen.cpp（と checker.cpp）の雛形を置く")
+    p = sub.add_parser("init", help="gen.cpp（と checker.cpp / interactor.cpp）の雛形を置く")
     p.add_argument("-c", "--checker", action="store_true", help="checker.cpp の雛形も置く")
+    p.add_argument("-i", "--interactor", action="store_true", help="interactor.cpp の雛形も置く")
     p.add_argument("--force", action="store_true")
     p.add_argument("name", nargs="?", help=argparse.SUPPRESS)
 

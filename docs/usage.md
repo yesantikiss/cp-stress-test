@@ -3,12 +3,13 @@
 問題のディレクトリ（`~/atcoder`）で:
 
 ```bash
-st init            # gen.cpp の雛形を置く（-c で checker.cpp も）
+st init            # gen.cpp の雛形を置く（-c で checker.cpp、-i で interactor.cpp も）
 st                 # main.cpp と guchoku.cpp を gen.cpp の入力で 1000 回比べる
 st -n 5000 --seed 42
 st -g random -g all_same  # 使う生成器を絞る
 st -t 60           # 60 秒回す
 st -c checker.cpp  # スペシャルジャッジ（--ref で愚直解の出力を第 3 引数に渡す）
+st -i interactor.cpp  # インタラクティブ（docs/interactive.md）
 st --tl 1 --san    # TL 1 秒、ASan / UBSan / _GLIBCXX_DEBUG
 st --cmp float:1e-6
 st repro SEED:CAP:NAME    # 失敗時に表示されたケースを再現

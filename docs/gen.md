@@ -32,6 +32,8 @@ STRESS_BIG(max) {                  // 最大ケース。st では使わず、st 
 | `choice(v)` `shuffle(v)` | 選択 |
 | `tree(n, {.shape, .w})` | 木（random / path / star / caterpillar / binary / deep、省略時は混ぜる） |
 | `graph(n, m, {.connected, .simple, .directed, .w})` | グラフ |
+| `dag(n, m, {.connected, .simple, .increasing, .w})` | DAG |
+| `bipartite(n1, n2, m, {.connected, .simple, .merged, .w})` `bipartite(n, m, {...})` | 二部グラフ |
 | `str(n, "ab", {.shape})` `str(n, [&]{...})` `mutate(s, k)` `strs(k, total, "ab")` `grid(h, w, ".#")` | 文字列（random / periodic / palindrome / fibonacci / runs） |
 | `out(...)` `out(edges)` `out_lines(v)` | 出力 |
 
@@ -149,9 +151,57 @@ auto es = g.graph(n, m, {.simple = false, .directed = true});
 
 単純グラフで `m` が辺の最大数（無向 n(n-1)/2、有向 n(n-1)）を超えるとエラー。辺の順番と頂点番号は木と同じくシャッフルされる。
 
+## DAG
+
+```cpp
+auto es = g.dag(n, m);                                      // 単純な DAG
+auto es = g.dag(n, m, {.connected = true});                 // 弱連結
+auto es = g.dag(n, m, {.increasing = true});                // 常に u < v
+```
+
+ランダムなトポ順を作り、トポ順で前の頂点から後ろの頂点への辺だけを張る。頂点番号と辺の順番はシャッフルするので、出力からトポ順は分からない。
+
+| オプション | 既定 | 意味 |
+| --- | --- | --- |
+| `.connected` | `false` | 弱連結にする（向きを無視して連結）。`m >= n - 1` が必要 |
+| `.simple` | `true` | 多重辺を作らない。自己ループはどちらでも出ない |
+| `.increasing` | `false` | 頂点番号をトポ順のままにして、常に `u < v` にする。「A_i < B_i」の制約がある問題向け |
+| `.w` | なし | 重み（Range かラムダ） |
+
+単純な DAG の辺の最大数は n(n-1)/2。
+
+## 二部グラフ
+
+```cpp
+auto es = g.bipartite(n1, n2, m);                           // 左 n1 頂点、右 n2 頂点
+auto es = g.bipartite(n1, n2, m, {.merged = true});         // n1+n2 頂点の通し番号
+auto es = g.bipartite(n, m, {.connected = true});           // 総頂点数だけ指定
+```
+
+`bipartite(n1, n2, m)` は既定で左右に別々の番号を振る。各辺 `u v` の `u` が左（1 から n1）、`v` が右（1 から n2）で、マッチングの問題によくある入力形式になる。`.merged = true` にすると、n1+n2 頂点に通し番号をシャッフルして振り、各辺の向きもランダムにする。「二部グラフか判定せよ」のような、普通のグラフとして入力される問題向け。
+
+`bipartite(n, m)` は総頂点数だけ指定する版で、左右の大きさは m 本の辺が入る分け方からランダムに選ぶ。番号は常に通し番号（`.merged` は無視される）。
+
+| オプション | 既定 | 意味 |
+| --- | --- | --- |
+| `.connected` | `false` | 連結にする。先に二部グラフの全域木を入れてから残りの辺を足す。`m >= n1 + n2 - 1` と、両側が 1 頂点以上あることが必要 |
+| `.simple` | `true` | 多重辺を作らない |
+| `.merged` | `false` | 通し番号にする（上の説明） |
+| `.w` | なし | 重み（Range かラムダ） |
+
+単純な二部グラフの辺の最大数は n1 * n2。無向のみ。
+
+## 辺に文字を付ける
+
+重み `.w` は整数なので、文字を返すラムダを渡すと文字コードの数値が出る。辺に文字を付けたいときは、重みなしで作って自分で出す。
+
+```cpp
+for (auto e : g.tree(n)) g.out(e.u, e.v, g.choice("abc"));  // "u v c" を n-1 行
+```
+
 ## 頂点番号
 
-`g.one_indexed` が `true`（既定）なら `tree` / `graph` / `perm` は 1 始まり、`false` なら 0 始まりになる。生成器の最初で `g.one_indexed = false;` と書けばその生成器の中で全部 0 始まりになる。
+`g.one_indexed` が `true`（既定）なら `tree` / `graph` / `dag` / `bipartite` / `perm` は 1 始まり、`false` なら 0 始まりになる。生成器の最初で `g.one_indexed = false;` と書けばその生成器の中で全部 0 始まりになる。
 
 ## 文字列
 

@@ -17,7 +17,7 @@ st last                    # transcript も表示する
 - gen.cpp は今までどおり書く。出力は interactor が読むので、隠し情報（数当てなら答えの数）も含める。main は in.txt を見ない。
 - 愚直解とは比べない。正しいかどうかは interactor が隠し情報から判定する。guchoku.cpp はなくてよい。
 - 名前付き生成器、cap を小さい方から増やすこと、失敗後の縮小、`st repro` はそのまま動く。
-- 適応的（adaptive）な interactor も書ける。乱数を使うなら seed を入力に含めておくと再現できる。
+- 適応的（adaptive）な interactor も書ける（[下の例](#適応的な-interactor)）。乱数を使うなら seed を入力に含めておくと再現できる。
 
 ## interactor.cpp
 
@@ -64,6 +64,57 @@ void interact(Interactor& it) {
 | `it.accept()` / `it.fail(msg)` | AC で終わる / interactor 自身の失敗 |
 
 `interact` から戻ると、main が出力を閉じるまで待ち、余分な出力があれば WA にする。終了コードは checker と同じで 0 = AC, 1 = WA, 3 = interactor の失敗。
+
+## 適応的な interactor
+
+答えを最初に決めず、解答の質問に合わせて後から決める interactor。「運よく当たる」解を落とせる。数当てなら、x を持たずに「x としてまだありうる範囲 `[lo, hi]`」だけを持ち、範囲が広く残る方を答える。
+
+```cpp
+#include "stress/interact.hpp"
+
+void interact(Interactor& it) {
+    int n;
+    unsigned long long seed;
+    it.in >> n >> seed;  // gen は g.out(n, g.i(0, 1000000000)) のように seed も出す
+    it.send(n);
+    it.query_limit(25);
+    int lo = 1, hi = n;  // x としてありうる範囲
+    while (true) {
+        std::string t;
+        it.out >> t;
+        if (t == "?") {
+            int y;
+            it.out >> y;
+            it.ensure(1 <= y && y <= n, "y is out of range");
+            it.count_query();
+            // Yes（x <= y）なら [lo, min(hi, y)]、No なら [max(lo, y + 1), hi] が残る
+            long long yes = std::max(0, std::min(hi, y) - lo + 1);
+            long long no = std::max(0, hi - std::max(lo, y + 1) + 1);
+            // 広く残る方を答える。同じ広さなら seed で決める
+            bool say_yes = yes != no ? yes > no : (seed >> (it.queries() % 64)) & 1;
+            if (say_yes) hi = std::min(hi, y);
+            else lo = std::max(lo, y + 1);
+            it.send(say_yes ? "Yes" : "No");
+        } else if (t == "!") {
+            int ans;
+            it.out >> ans;
+            // 1 つに絞れていて、それと一致したときだけ正解
+            it.ensure(lo == hi && ans == lo, "answer is not determined yet");
+            return;
+        } else {
+            it.wrong("unknown command: " + t);
+        }
+    }
+}
+```
+
+幅 2 まで絞ったところで当てずっぽうに答える解は、x を固定した interactor だとたまたま当たって通ることがある。この interactor なら、幅 2 で答えた時点で必ず WA になる。
+
+書くときの注意:
+
+- 判定は「これまでの答えと矛盾しない x が 1 つしかなく、それを答えた」にする。x を途中で 1 つに決めてしまうと、適応的にした意味がなくなる。
+- 答え方を乱数で決めるときは、seed を gen の出力に入れて `it.in` から読む。interactor の中で時刻などから seed を作ると `st repro` で同じやり取りにならない。
+- 最悪の答え方だけだと、解の偏り（いつも左を先に聞く、など）に気づけないことがある。gen に「適応的」と「固定」の 2 種類の生成器を作り、入力の先頭の値で interactor の振る舞いを切り替えるのもよい。
 
 ## 判定
 

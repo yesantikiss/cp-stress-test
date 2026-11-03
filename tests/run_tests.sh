@@ -64,5 +64,7 @@ check inter_extra   1 st -i interactor.cpp --main main_extra.cpp --seed 1
 check inter_repro   1 st repro "$(python3 -c 'import json;print(json.load(open(".stress/last/meta.json"))["case"])')" -i interactor.cpp --main main_extra.cpp
 check inter_with_c  2 st -i interactor.cpp -c checker.cpp --main main_ok.cpp
 check inter_init    0 st init -i --force
+check inter_adaptive_ok    0 st -i interactor_adaptive.cpp --main main_ok.cpp -n 300 --seed 1
+check inter_adaptive_guess 1 st -i interactor_adaptive.cpp --main main_guess.cpp -n 300 --seed 1
 
 [ "$fail" -eq 0 ] && echo "All tests passed" || { echo "Some tests failed"; exit 1; }

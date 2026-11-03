@@ -12,3 +12,5 @@ void judge(Judge& j) {
 ```
 
 `./checker <input> <output> [reference]`、終了コード 0 = AC, 1 = WA, 3 = checker の失敗。今までの `checker in out` 形式の checker もそのまま使える。
+
+`j.out >> x` のように `>>` でも読める（読めない、型の範囲外のときは WA。値の範囲は自分で `ensure` する）。

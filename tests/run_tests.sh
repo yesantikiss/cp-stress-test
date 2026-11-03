@@ -47,4 +47,22 @@ if [ "$(ls cases | wc -l)" -eq 4 ]; then echo "ok   make_files"; else echo "FAIL
 check bench_ok          0 st bench --main main_ok.cpp -n 1 --seed 3
 check bench_tle         1 st bench --main main_slow.cpp -n 1 --seed 3 --tl 0.5
 
+# インタラクティブ（数当て、25 回まで）
+work3="$build_dir/interactive"
+rm -rf "$work3" && cp -r "$root/tests/interactive" "$work3" && cd "$work3"
+check inter_ok      0 st -i interactor.cpp --main main_ok.cpp -n 300 --seed 1
+check inter_wa      1 st -i interactor.cpp --main main_wa.cpp --seed 1
+grep -q '"kind": "WA"' .stress/last/meta.json && grep -q '^> ! ' .stress/last/transcript.txt \
+    && echo "ok   inter_transcript" || { echo "FAIL inter_transcript"; fail=1; }
+check inter_limit   1 st -i interactor.cpp --main main_many.cpp --seed 1 -n 1000 --no-shrink
+grep -q 'query limit exceeded' .stress/last/meta.json && echo "ok   inter_limit_msg" || { echo "FAIL inter_limit_msg"; fail=1; }
+check inter_noflush 1 st -i interactor.cpp --main main_noflush.cpp --seed 1 --tl 0.5 --no-shrink
+grep -q '"kind": "TLE"' .stress/last/meta.json && echo "ok   inter_noflush_tle" || { echo "FAIL inter_noflush_tle"; fail=1; }
+check inter_re      1 st -i interactor.cpp --main main_re.cpp --seed 1
+grep -q '"kind": "RE"' .stress/last/meta.json && echo "ok   inter_re_kind" || { echo "FAIL inter_re_kind"; fail=1; }
+check inter_extra   1 st -i interactor.cpp --main main_extra.cpp --seed 1
+check inter_repro   1 st repro "$(python3 -c 'import json;print(json.load(open(".stress/last/meta.json"))["case"])')" -i interactor.cpp --main main_extra.cpp
+check inter_with_c  2 st -i interactor.cpp -c checker.cpp --main main_ok.cpp
+check inter_init    0 st init -i --force
+
 [ "$fail" -eq 0 ] && echo "All tests passed" || { echo "Some tests failed"; exit 1; }

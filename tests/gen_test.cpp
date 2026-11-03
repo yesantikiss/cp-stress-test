@@ -115,6 +115,93 @@ int main() {
         auto es = g.graph(5, 20, {.simple = false});
         assert(es.size() == 20);
     }
+    // DAG
+    for (int k = 0; k < 300; ++k) {
+        ll n = g.i(1, 12);
+        bool connected = g.coin(), increasing = g.coin(), simple = g.coin(0.8);
+        ll mx = n * (n - 1) / 2;
+        ll lo = connected ? n - 1 : 0;
+        ll m = simple ? g.i(lo, mx) : (n == 1 ? 0 : g.i(lo, mx + 5));
+        auto es = g.dag(n, m, {.connected = connected, .simple = simple, .increasing = increasing});
+        assert((ll)es.size() == m);
+        std::set<std::pair<ll, ll>> seen;
+        std::vector<std::vector<ll>> adj(n);
+        std::vector<ll> indeg(n), p(n);
+        std::iota(p.begin(), p.end(), 0);
+        std::function<ll(ll)> f = [&](ll x) { return p[x] == x ? x : p[x] = f(p[x]); };
+        for (auto& e : es) {
+            assert(e.u != e.v && 1 <= e.u && e.u <= n && 1 <= e.v && e.v <= n);
+            if (increasing) assert(e.u < e.v);
+            if (simple) assert(seen.insert({e.u, e.v}).second);
+            adj[e.u - 1].push_back(e.v - 1), ++indeg[e.v - 1];
+            p[f(e.u - 1)] = f(e.v - 1);
+        }
+        std::vector<ll> q;
+        for (ll v = 0; v < n; ++v)
+            if (!indeg[v]) q.push_back(v);
+        for (size_t h = 0; h < q.size(); ++h)
+            for (ll w : adj[q[h]])
+                if (!--indeg[w]) q.push_back(w);
+        assert((ll)q.size() == n);  // 閉路なし
+        if (connected)
+            for (ll v = 0; v < n; ++v) assert(f(v) == f(0));
+    }
+    {
+        auto es = g.dag(4, 3, {.w = Range{7, 7}});
+        assert(es.weighted && es[0].w == 7);
+    }
+    // 二部グラフ（左右別番号 / 通し番号 / 総頂点数だけ）
+    for (int k = 0; k < 600; ++k) {
+        int mode = k % 3;
+        ll n1 = g.i(0, 7), n2 = g.i(0, 7);
+        if (mode == 2) n1 = g.i(1, 12), n2 = 0;
+        if (n1 + n2 == 0) continue;
+        ll n = n1 + n2;
+        bool connected = g.coin(), simple = g.coin(0.8);
+        ll mx = mode == 2 ? (n / 2) * (n - n / 2) : n1 * n2;
+        if (connected && n >= 2 && mode != 2 && (n1 == 0 || n2 == 0)) continue;
+        ll lo = connected ? n - 1 : 0;
+        if (lo > mx) continue;
+        ll m = simple || mx == 0 ? g.i(lo, mx) : g.i(lo, mx + 5);
+        Edges es = mode == 2 ? g.bipartite(n, m, {.connected = connected, .simple = simple})
+                             : g.bipartite(n1, n2, m, {.connected = connected, .simple = simple, .merged = mode == 1});
+        assert((ll)es.size() == m);
+        std::set<std::pair<ll, ll>> seen;
+        std::vector<ll> p(n);
+        std::iota(p.begin(), p.end(), 0);
+        std::function<ll(ll)> f = [&](ll x) { return p[x] == x ? x : p[x] = f(p[x]); };
+        std::vector<std::vector<ll>> adj(n);
+        for (auto& e : es) {
+            if (mode == 0) {
+                assert(1 <= e.u && e.u <= n1 && 1 <= e.v && e.v <= n2);
+                if (simple) assert(seen.insert({e.u, e.v}).second);
+                p[f(e.u - 1)] = f(n1 + e.v - 1);
+            } else {
+                assert(e.u != e.v && 1 <= e.u && e.u <= n && 1 <= e.v && e.v <= n);
+                if (simple) assert(seen.insert({std::min(e.u, e.v), std::max(e.u, e.v)}).second);
+                adj[e.u - 1].push_back(e.v - 1), adj[e.v - 1].push_back(e.u - 1);
+                p[f(e.u - 1)] = f(e.v - 1);
+            }
+        }
+        if (mode != 0) {  // 2 彩色できる
+            std::vector<int> col(n, -1);
+            for (ll s = 0; s < n; ++s) {
+                if (col[s] != -1) continue;
+                col[s] = 0;
+                std::vector<ll> st{s};
+                while (!st.empty()) {
+                    ll v = st.back();
+                    st.pop_back();
+                    for (ll w : adj[v]) {
+                        if (col[w] == -1) col[w] = col[v] ^ 1, st.push_back(w);
+                        assert(col[w] != col[v]);
+                    }
+                }
+            }
+        }
+        if (connected)
+            for (ll v = 0; v < n; ++v) assert(f(v) == f(0));
+    }
     // 文字列
     for (auto shape : {StrShape::mixed, StrShape::random, StrShape::periodic, StrShape::palindrome,
                        StrShape::fibonacci, StrShape::runs}) {

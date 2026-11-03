@@ -1,6 +1,6 @@
 #pragma once
 
-// 木とグラフ: tree / graph
+// 木とグラフ: tree / graph / dag / bipartite
 
 #include "core.hpp"
 
@@ -25,6 +25,20 @@ struct GraphOpt {
     bool connected = false;
     bool simple = true;     // 自己ループと多重辺なし
     bool directed = false;
+    Value w{};
+};
+
+struct DagOpt {
+    bool connected = false;   // 弱連結
+    bool simple = true;       // 多重辺なし（自己ループはどちらでも出ない）
+    bool increasing = false;  // true なら常に u < v（頂点番号がそのままトポ順）
+    Value w{};
+};
+
+struct BipartiteOpt {
+    bool connected = false;
+    bool simple = true;   // 多重辺なし
+    bool merged = false;  // true なら n1+n2 頂点の通し番号をシャッフルして振る
     Value w{};
 };
 
@@ -113,7 +127,148 @@ class GraphOps {
         return finish_edges(n, raw, opt.w, /*shuffle_labels=*/true, opt.directed);
     }
 
+    // ランダムなトポ順の上で、前から後ろへの辺だけを張る。
+    Edges dag(ll n, ll m, DagOpt opt = {}) {
+        if (n <= 0) gen_error("dag: n must be positive");
+        const ll max_edges = n * (n - 1) / 2;
+        if (m > max_edges && (opt.simple || n == 1))
+            gen_error("dag: m=" + std::to_string(m) + " exceeds the maximum " + std::to_string(max_edges) +
+                      (opt.simple ? " for a simple DAG" : " (n=1 has no edges)"));
+        if (opt.connected && m < n - 1) gen_error("dag: connected DAG needs m >= n-1");
+        // 頂点 i はトポ順の i 番目。辺は常に (小, 大)。
+        std::vector<std::pair<ll, ll>> raw;
+        if (opt.connected) raw = spanning_tree(n);
+        for (auto& [u, v] : raw)
+            if (u > v) std::swap(u, v);
+        fill_edges(raw, m, max_edges, opt.simple, /*ordered=*/false,
+                   [&] {
+                       ll u = self().uniform(0, n - 1), v = self().uniform(0, n - 2);
+                       if (v >= u) ++v;
+                       return std::pair{std::min(u, v), std::max(u, v)};
+                   },
+                   [&](auto&& emit) {
+                       for (ll u = 0; u < n; ++u)
+                           for (ll v = u + 1; v < n; ++v) emit(u, v);
+                   });
+        return finish_edges(n, raw, opt.w, /*shuffle_labels=*/!opt.increasing, /*directed=*/true);
+    }
+
+    // 左 n1 頂点、右 n2 頂点の二部グラフ。既定では各辺 "u v" の u が左 (1..n1)、v が右 (1..n2)。
+    Edges bipartite(ll n1, ll n2, ll m, BipartiteOpt opt = {}) {
+        if (n1 < 0 || n2 < 0 || n1 + n2 <= 0) gen_error("bipartite: n1, n2 must be >= 0 and n1+n2 > 0");
+        const ll max_edges = n1 * n2;
+        if (m > max_edges && (opt.simple || max_edges == 0))
+            gen_error("bipartite: m=" + std::to_string(m) + " exceeds the maximum " + std::to_string(max_edges) +
+                      (opt.simple ? " for a simple bipartite graph" : " (one side is empty)"));
+        if (opt.connected && m < n1 + n2 - 1) gen_error("bipartite: connected graph needs m >= n1+n2-1");
+        if (opt.connected && n1 + n2 >= 2 && (n1 == 0 || n2 == 0))
+            gen_error("bipartite: connected graph needs both sides non-empty");
+        // raw は (左の番号, 右の番号)、どちらも 0 始まり。
+        std::vector<std::pair<ll, ll>> raw;
+        if (opt.connected && n1 > 0 && n2 > 0) {
+            std::vector<ll> placed_l{self().uniform(0, n1 - 1)}, placed_r{self().uniform(0, n2 - 1)};
+            raw.push_back({placed_l[0], placed_r[0]});
+            std::vector<ll> rest;  // 左は a、右は n1 + b
+            for (ll a = 0; a < n1; ++a)
+                if (a != placed_l[0]) rest.push_back(a);
+            for (ll b = 0; b < n2; ++b)
+                if (b != placed_r[0]) rest.push_back(n1 + b);
+            self().shuffle(rest);
+            for (ll x : rest) {
+                if (x < n1) {
+                    raw.push_back({x, self().choice(placed_r)});
+                    placed_l.push_back(x);
+                } else {
+                    raw.push_back({self().choice(placed_l), x - n1});
+                    placed_r.push_back(x - n1);
+                }
+            }
+        }
+        fill_edges(raw, m, max_edges, opt.simple, /*ordered=*/true,
+                   [&] { return std::pair{self().uniform(0, n1 - 1), self().uniform(0, n2 - 1)}; },
+                   [&](auto&& emit) {
+                       for (ll a = 0; a < n1; ++a)
+                           for (ll b = 0; b < n2; ++b) emit(a, b);
+                   });
+        if (opt.merged) {
+            for (auto& e : raw) e.second += n1;
+            return finish_edges(n1 + n2, raw, opt.w, /*shuffle_labels=*/true, /*directed=*/false);
+        }
+        std::vector<ll> label_l(n1), label_r(n2);
+        std::iota(label_l.begin(), label_l.end(), 0);
+        std::iota(label_r.begin(), label_r.end(), 0);
+        self().shuffle(label_l);
+        self().shuffle(label_r);
+        self().shuffle(raw);
+        Edges es;
+        es.weighted = !std::holds_alternative<std::monostate>(opt.w);
+        es.reserve(raw.size());
+        for (auto [a, b] : raw) {
+            Edge e{label_l[a] + self().base(), label_r[b] + self().base(), 0};
+            if (es.weighted) e.w = self().draw(opt.w);
+            es.push_back(e);
+        }
+        return es;
+    }
+
+    // 総頂点数 n だけ指定する二部グラフ。左右の分け方はランダムで、頂点番号は通し (1..n) になる。
+    Edges bipartite(ll n, ll m, BipartiteOpt opt = {}) {
+        if (n <= 0) gen_error("bipartite: n must be positive");
+        if (n == 1) {
+            opt.merged = true;
+            return bipartite(1, 0, m, opt);
+        }
+        std::vector<ll> ok;  // m 本入る左の大きさ
+        for (ll n1 = 1; n1 < n; ++n1)
+            if (n1 * (n - n1) >= m || !opt.simple) ok.push_back(n1);
+        if (ok.empty())
+            gen_error("bipartite: m=" + std::to_string(m) + " exceeds the maximum " +
+                      std::to_string((n / 2) * (n - n / 2)) + " for a simple bipartite graph with n=" +
+                      std::to_string(n));
+        const ll n1 = self().choice(ok);
+        opt.merged = true;
+        return bipartite(n1, n - n1, m, opt);
+    }
+
   private:
+    // ランダムな全域木の辺（0 始まり、頂点番号はそのまま）。
+    std::vector<std::pair<ll, ll>> spanning_tree(ll n) {
+        std::vector<ll> label(n);
+        std::iota(label.begin(), label.end(), 0);
+        self().shuffle(label);
+        auto t = prufer_tree(n);
+        for (auto& [u, v] : t) u = label[u], v = label[v];
+        return t;
+    }
+
+    // raw に辺を足して m 本にする。ordered なら (u, v) と (v, u) を別の辺とみなす。
+    // draw() はランダムな候補を 1 本返す。each(emit) は全候補を emit(u, v) で列挙する。
+    template <class Draw, class Each>
+    void fill_edges(std::vector<std::pair<ll, ll>>& raw, ll m, ll max_edges, bool simple, bool ordered, Draw draw,
+                    Each each) {
+        std::set<std::pair<ll, ll>> used;
+        auto key = [&](ll u, ll v) { return ordered ? std::pair{u, v} : std::pair{std::min(u, v), std::max(u, v)}; };
+        if (simple)
+            for (auto [u, v] : raw) used.insert(key(u, v));
+        const ll need = m - static_cast<ll>(raw.size());
+        if (need <= 0) return;
+        if (simple && need > (max_edges - static_cast<ll>(raw.size())) / 2) {
+            // 密なとき: 候補を全列挙して選ぶ
+            std::vector<std::pair<ll, ll>> cand;
+            each([&](ll u, ll v) {
+                if (!used.count(key(u, v))) cand.push_back({u, v});
+            });
+            self().shuffle(cand);
+            cand.resize(need);
+            raw.insert(raw.end(), cand.begin(), cand.end());
+            return;
+        }
+        while (static_cast<ll>(raw.size()) < m) {
+            auto [u, v] = draw();
+            if (simple && !used.insert(key(u, v)).second) continue;
+            raw.push_back({u, v});
+        }
+    }
     std::vector<std::pair<ll, ll>> prufer_tree(ll n) {
         std::vector<std::pair<ll, ll>> edges;
         if (n == 1) return edges;

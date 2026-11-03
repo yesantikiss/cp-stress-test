@@ -944,7 +944,7 @@ def add_build(p: argparse.ArgumentParser) -> None:
     p.add_argument("--gen-file", default="gen.cpp", help="ジェネレータのソース (default: gen.cpp)")
     p.add_argument("--san", action="store_true", help="AddressSanitizer / UBSan / _GLIBCXX_DEBUG でビルド")
     p.add_argument("--cxxflags", default=os.environ.get("STRESS_CXXFLAGS", ""), help="追加のコンパイルフラグ")
-    p.add_argument("--gen-tl", type=float, default=10.0, help=argparse.SUPPRESS)
+    p.add_argument("--gen-tl", type=float, default=10.0, help="gen の制限時間 [s] (default: 10)")
 
 
 def add_common(p: argparse.ArgumentParser) -> None:
@@ -956,7 +956,7 @@ def add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("-i", "--interactor", metavar="SRC", help="インタラクティブ（例: -i interactor.cpp）。愚直解は使わない")
     p.add_argument("--tl", type=float, default=2.0, help="main の制限時間 [s] (default: 2)")
     p.add_argument("--ref-tl", type=float, default=10.0, help="愚直解の制限時間 [s] (default: 10)")
-    p.add_argument("--checker-tl", type=float, default=10.0, help=argparse.SUPPRESS)
+    p.add_argument("--checker-tl", type=float, default=10.0, help="checker / interactor の制限時間 [s] (default: 10)")
     p.add_argument("--cmp", default=None, help="比較方法: token (default) / exact / float[:EPS]")
 
 
@@ -984,8 +984,8 @@ def parse(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--seed", type=int, help="基準 seed（省略時はランダム）")
     p.add_argument("--max-cap", type=int, help="g.size() に渡す cap の上限")
     p.add_argument("--no-shrink", dest="shrink", action="store_false", help="失敗後の縮小をしない")
-    p.add_argument("--shrink-tries", type=int, default=200, help=argparse.SUPPRESS)
-    p.add_argument("--shrink-time", type=float, default=20.0, help=argparse.SUPPRESS)
+    p.add_argument("--shrink-tries", type=int, default=200, help="縮小で cap 1 つあたりに試す回数 (default: 200)")
+    p.add_argument("--shrink-time", type=float, default=20.0, help="縮小にかける時間の上限 [s] (default: 20)")
 
     p = sub.add_parser("repro", help="SEED:CAP:NAME のケースを 1 つ再現する")
     add_common(p)
@@ -1011,8 +1011,8 @@ def parse(argv: list[str]) -> argparse.Namespace:
     p = sub.add_parser("init", help="gen.cpp（と checker.cpp / interactor.cpp）の雛形を置く")
     p.add_argument("-c", "--checker", action="store_true", help="checker.cpp の雛形も置く")
     p.add_argument("-i", "--interactor", action="store_true", help="interactor.cpp の雛形も置く")
-    p.add_argument("--force", action="store_true")
-    p.add_argument("name", nargs="?", help=argparse.SUPPRESS)
+    p.add_argument("--force", action="store_true", help="同じ名前のファイルがあっても上書きする")
+    p.add_argument("name", nargs="?", help="置くファイルの名前（gen.cpp だけを置くとき。例: st init gen2.cpp）")
 
     return ap.parse_args(argv)
 

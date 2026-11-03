@@ -60,8 +60,11 @@ void interact(Interactor& it) {
 | `read_int(lo, hi)` など | checker と同じ関数も使える（範囲外は自動で WA） |
 | `it.send(a, b, ...)` | 空白区切りで 1 行送って flush。`vector` は要素を並べる |
 | `it.query_limit(q)` / `it.count_query()` | 回数制限。超えたら WA「query limit exceeded (26 > 25)」 |
+| `it.queries()` | これまでに `count_query` した回数 |
 | `it.ensure(cond, msg)` / `it.wrong(msg)` | WA |
 | `it.accept()` / `it.fail(msg)` | AC で終わる / interactor 自身の失敗 |
+
+`>>` や `read_int` などの読み取りは checker と同じ `Reader` で、細かい振る舞いは [checker.cpp の書き方](checker.md#読み取り) にある。`STRESS_NO_MAIN` も checker と同じく使える。
 
 `interact` から戻ると、main が出力を閉じるまで待ち、余分な出力があれば WA にする。終了コードは checker と同じで 0 = AC, 1 = WA, 3 = interactor の失敗。
 

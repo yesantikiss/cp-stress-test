@@ -147,9 +147,24 @@ class Core {
         }
     }
 
+    // ---------- タグ（失敗したときに st が表示する） ----------
+
+    // このケースの種類を記録する。mixed で選ばれた形は自動で付く（"str=palindrome" など）。
+    // 同じタグは回数を数えるだけで、何度付けてもいい。
+    void tag(std::string_view t) {
+        for (auto& [name, count] : tags_)
+            if (name == t) {
+                ++count;
+                return;
+            }
+        tags_.push_back({std::string(t), 1});
+    }
+    const std::vector<std::pair<std::string, ll>>& tags() const { return tags_; }
+
   private:
     std::uint64_t s_[4];
     ll cap_;
+    std::vector<std::pair<std::string, ll>> tags_;  // 付けた順、(タグ, 回数)
     static std::uint64_t rotl(std::uint64_t x, int k) { return (x << k) | (x >> (64 - k)); }
     static std::uint64_t splitmix64(std::uint64_t& x) {
         std::uint64_t z = (x += 0x9e3779b97f4a7c15ULL);

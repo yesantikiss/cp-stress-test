@@ -41,6 +41,8 @@ rm -rf "$work2" && cp -r "$root/tests/multi" "$work2" && cd "$work2"
 check multi_random_only 0 st --main main_same.cpp -g random -n 300 --seed 1
 check multi_all_same    1 st --main main_same.cpp --seed 1
 if grep -q '"gen": "all_same"' .stress/last/meta.json; then echo "ok   multi_gen_name_saved"; else echo "FAIL multi_gen_name_saved"; fail=1; fi
+grep -q '"same"' .stress/last/meta.json && grep -q '^tags: same$' "$build_dir/multi_all_same.log" \
+    && echo "ok   multi_tags" || { echo "FAIL multi_tags"; fail=1; }
 check multi_repro       1 st repro "$(python3 -c 'import json;print(json.load(open(".stress/last/meta.json"))["case"])')" --main main_same.cpp
 check make              0 st make max all_same -n 2 --seed 3 -o cases
 if [ "$(ls cases | wc -l)" -eq 4 ]; then echo "ok   make_files"; else echo "FAIL make_files"; fail=1; fi

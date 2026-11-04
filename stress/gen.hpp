@@ -14,7 +14,7 @@
 //   cap は g.size() の上限。ドライバが小さい値から順に渡す。
 //
 // 中身はファイルごとに分かれている:
-//   gen/core.hpp    乱数、i / uniform / size / real / coin / choice / shuffle、Range
+//   gen/core.hpp    乱数、i / uniform / size / real / coin / choice / shuffle、Range、tag
 //   gen/array.hpp   vec / sorted / distinct / perm / partition
 //   gen/graph.hpp   tree / parents / graph / dag / bipartite
 //   gen/big.hpp     big / big_range、digits::*
@@ -45,6 +45,7 @@ class Gen : public Core,
 namespace digits = stress::digits;
 using stress::Edges;
 using stress::Gen;
+using stress::GraphShape;
 using stress::Range;
 using stress::StrShape;
 using stress::TreeShape;
@@ -123,6 +124,13 @@ int main(int argc, char** argv) {
     stress::Gen g(seed, cap);
     entry->fn(g);
     std::fwrite(g.buffer().data(), 1, g.buffer().size(), stdout);
+    // st が環境変数 STRESS_TAGS にファイル名を渡したときだけ、タグを "タグ<TAB>回数" で書く。
+    if (const char* path = std::getenv("STRESS_TAGS"); path && *path) {
+        if (std::FILE* f = std::fopen(path, "w")) {
+            for (auto& [t, c] : g.tags()) std::fprintf(f, "%s\t%lld\n", t.c_str(), c);
+            std::fclose(f);
+        }
+    }
     return 0;
 }
 #endif

@@ -32,12 +32,13 @@ STRESS_BIG(max) {                  // 最大ケース。st では使わず、st 
 | `choice(v)` `shuffle(v)` | 選択 |
 | `tree(n, {.shape, .w})` | 木（random / path / star / caterpillar / binary / deep、省略時は混ぜる） |
 | `parents(n, {.shape, .ordered})` | 根付き木の親の列（既定は P_2 … P_n で P_i < i） |
-| `graph(n, m, {.connected, .simple, .directed, .w})` | グラフ |
+| `graph(n, m, {.shape, .connected, .simple, .directed, .w})` | グラフ（random / dag / bipartite / pieces / hub / path、省略時は混ぜる） |
 | `dag(n, m, {.connected, .simple, .increasing, .w})` | DAG |
 | `bipartite(n1, n2, m, {.connected, .simple, .merged, .w})` `bipartite(n, m, {...})` | 二部グラフ |
 | `str(n, "ab", {.shape})` `str(n, [&]{...})` `mutate(s, k)` `strs(k, total, "ab")` `grid(h, w, ".#")` | 文字列（random / periodic / palindrome / fibonacci / runs） |
 | `big(len, {.digits, .lead_zero})` `big_range("1", "1e100", {.digits})` | 巨大整数（文字列で返す） |
 | `out(...)` `out(edges)` `out_lines(v)` | 出力 |
+| `tag("name")` | ケースにタグを付ける（失敗時に表示される） |
 
 重み `.w` は `Range{l, r}` か、値を返すラムダ。頂点番号は既定で 1 始まり（`g.one_indexed = false` で 0 始まり）。
 
@@ -166,19 +167,38 @@ for (int i = 0; i < n - 1; ++i) g.out(p[i], g.i(1, 100));   // "P_i W_i" を n-1
 ## グラフ
 
 ```cpp
-auto es = g.graph(n, m);                                    // 単純な無向グラフ
+auto es = g.graph(n, m);                                    // 単純な無向グラフ。形は混ぜる
 auto es = g.graph(n, m, {.connected = true, .w = Range{1, 1000000000}});
 auto es = g.graph(n, m, {.simple = false, .directed = true});
+auto es = g.graph(n, m, {.shape = GraphShape::hub});        // 形を指定
 ```
 
 | オプション | 既定 | 意味 |
 | --- | --- | --- |
-| `.connected` | `false` | 連結にする。先にランダムな全域木を入れてから残りの辺を足す。`m >= n - 1` が必要 |
+| `.shape` | `GraphShape::mixed` | 辺の張り方（下の表） |
+| `.connected` | `false` | 連結にする。先に全域木を入れてから残りの辺を足す。`m >= n - 1` が必要 |
 | `.simple` | `true` | 自己ループと多重辺を作らない。`false` だとどちらも出る |
 | `.directed` | `false` | 有向グラフ。`connected` と一緒に使うと、全域木の辺の向きはランダムなので強連結にはならない |
 | `.w` | なし | 重み（Range かラムダ） |
 
-単純グラフで `m` が辺の最大数（無向 n(n-1)/2、有向 n(n-1)）を超えるとエラー。辺の順番と頂点番号は木と同じくシャッフルされる。
+| `.shape` | 形 |
+| --- | --- |
+| `GraphShape::random` | 一様ランダムに辺を張る。`connected` なら土台の全域木は [木](#木) の mixed と同じように形を混ぜる（path や deep なら直径の長いグラフになる） |
+| `GraphShape::dag` | `dag(n, m, ...)` と同じ。有向のときだけ使える |
+| `GraphShape::bipartite` | `bipartite(n, m, ...)` と同じ（左右の大きさはランダム）。無向のときだけ使える |
+| `GraphShape::pieces` | 頂点を 2 つ以上の組に分け、組の中だけに辺を張る。連結成分が必ず 2 つ以上になり、m が小さければ森になる。`connected` とは一緒に使えず、n >= 2 が必要 |
+| `GraphShape::hub` | 1 から 3 個の頂点を中心に選び、辺の 8 割は中心から張る（次数が偏る）。`connected` なら土台はスター |
+| `GraphShape::path` | 頂点を一列に並べ、番号の差が w 以下の頂点どうしだけに辺を張る（直径が長い）。w は 1 から 3 で、m 本入らないときだけ広げる。`connected` なら土台はパス |
+| `GraphShape::mixed`（省略時） | 上のどれかを選ぶ（下の説明） |
+
+mixed は random を 2 つ、hub と path を 1 つずつ入れた候補に、条件に合えば次を足して、その中から 1 つ選ぶ。
+
+- 有向なら dag、無向なら bipartite（単純グラフで m 本入らないときは足さない）
+- `connected` でなく n >= 2 なら pieces（m 本入らないときは足さない）
+
+なので無向で連結でなければ random が 2/6、他が 1/6 ずつになる。木は混ぜない。木も試したいときは、`m = n - 1` で `g.tree(n)` を出す生成器を STRESS_GEN で別に作る。そうすれば失敗したときに、どの生成器だったかで木かどうかも分かる。
+
+形を指定したときに条件に合わなければエラーになる（無向で dag、有向で bipartite、`connected` で pieces、m が多すぎるなど）。単純グラフで `m` が辺の最大数（無向 n(n-1)/2、有向 n(n-1)）を超えるとエラー。辺の順番と頂点番号は木と同じくシャッフルされる。
 
 ## DAG
 
@@ -337,6 +357,44 @@ g.out_lines(grid);
 - `char` はそのまま 1 文字、`bool` は `1` / `0`、実数は値を表せる一番短い形（`std::to_chars`）で出る。
 - `Edges` と `vector<string>` は他の値と並べて `out(...)` に入れられない（コンパイルエラーになる）。それぞれ `out(es)` と `out_lines(v)` で単独で出す。
 - 出力はバッファにためて、生成器が終わったときにまとめて書き出す。
+
+## タグ
+
+ケースの種類を記録しておくと、失敗したときに `st` がそれを表示する。
+
+```text
+WA  token 1: main='5' ref='6'
+case=9473625110285193:3:random  ->  st repro 9473625110285193:3:random
+tags: graph=hub, str=palindrome x3, heavy
+```
+
+mixed の形で選ばれたものは自動で付く。形を指定したときは付かない。
+
+| タグ | 付くとき |
+| --- | --- |
+| `tree=形` | `tree(n)` で mixed が選んだ形 |
+| `parents=形` | `parents(n)` で mixed が選んだ形 |
+| `graph=形` | `graph(n, m)` で mixed が選んだ形 |
+| `graph.base=形` | `graph(n, m, {.connected = true})` で random になったとき、土台の木の形 |
+| `str=形` | `str` / `strs` で mixed が選んだ形 |
+
+自分で付けるときは `g.tag("名前")` を呼ぶ。生成器の中で分岐したときの目印などに使う。
+
+```cpp
+STRESS_GEN(random) {
+    int n = g.size(1, 10), q = g.size(1, 10);
+    bool heavy = g.coin(0.2);
+    if (heavy) g.tag("heavy");                              // 同じクエリばかりのケース
+    g.tag("q=" + std::to_string(q));                        // 値をタグにしてもいい
+    ...
+}
+```
+
+- 同じタグを何度付けても 1 つにまとめ、2 回以上なら `x3` のように回数を出す。`strs(k, ...)` で palindrome が 3 本選ばれれば `str=palindrome x3` になる。
+- 並びは最初に付けた順。
+- タグは入力には出ない。`./gen` を手で実行したときも何も出さない（`st` が環境変数 `STRESS_TAGS` に書き出し先を渡したときだけ、そのファイルに書く）。
+- 保存した失敗の `meta.json` の `tags` にも入る。
+- 生成器の名前（STRESS_GEN の名前）は `case=...` の最後に出るので、タグにしなくていい。
 
 ## 前の答えで復号するクエリ
 

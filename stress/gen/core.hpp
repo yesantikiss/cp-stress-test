@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -36,6 +37,10 @@ struct Range {
 
 // 重みなどの値の指定。無し / Range / 値を返すラムダ。
 using Value = std::variant<std::monostate, Range, std::function<ll()>>;
+
+struct DecimalOpt {
+    bool exact = false;  // true なら小数点以下ちょうど d 桁、false なら d 桁以下
+};
 
 class Core {
   public:
@@ -111,6 +116,41 @@ class Core {
 
     bool coin(double p = 0.5) { return real(0.0, 1.0) < p; }
 
+    // [lo, hi] の小数を文字列で返す。既定は小数点以下 d 桁以下（末尾の 0 は付けない）で、
+    // 先に桁数 k を 0..d から選ぶので "3" "3.5" "3.14" のように桁数がばらける。
+    // exact なら小数点以下ちょうど d 桁（"3.000"）。値は 10^-d 刻みで、端が出やすいのは i と同じ。
+    std::string decimal(double lo, double hi, ll d, DecimalOpt opt = {}) {
+        if (d < 0 || d > 18) gen_error("decimal: d must be in [0, 18]");
+        ll scale = 1;
+        for (ll t = 0; t < d; ++t) scale *= 10;
+        const long double sl = static_cast<long double>(lo) * scale, sh = static_cast<long double>(hi) * scale;
+        constexpr long double lim = 9.0e18L;
+        if (!(-lim < sl && sl < lim && -lim < sh && sh < lim))
+            gen_error("decimal: |lo|, |hi| times 10^d must be below 9e18");
+        const ll L = round_scaled(sl, true), H = round_scaled(sh, false);
+        if (L > H) gen_error("decimal: no value with " + std::to_string(d) + " decimals in [lo, hi]");
+        ll v;
+        if (opt.exact) {
+            v = i(L, H);
+        } else {
+            // 桁数 k を選ぶ。その刻みの値が範囲に無ければ k を増やす（k = d なら必ずある）。
+            ll k = uniform(0, d), step = 1;
+            for (ll t = k; t < d; ++t) step *= 10;
+            while (floor_div(H, step) < ceil_div(L, step)) step /= 10;
+            v = i(ceil_div(L, step), floor_div(H, step)) * step;
+        }
+        const ll ip = v / scale, fp = v % scale;  // 0 に向かって切り捨てるので符号は同じ
+        std::string res = (v < 0 ? "-" : "") + std::to_string(ip < 0 ? -ip : ip);
+        if (d > 0) {
+            std::string frac = std::to_string(fp < 0 ? -fp : fp);
+            frac.insert(0, static_cast<std::size_t>(d) - frac.size(), '0');
+            if (!opt.exact)
+                while (!frac.empty() && frac.back() == '0') frac.pop_back();
+            if (!frac.empty()) res += "." + frac;
+        }
+        return res;
+    }
+
     // ---------- 選択と並べ替え ----------
 
     template <class T>
@@ -162,6 +202,14 @@ class Core {
     const std::vector<std::pair<std::string, ll>>& tags() const { return tags_; }
 
   private:
+    static ll floor_div(ll a, ll b) { return a / b - ((a % b != 0) && ((a < 0) != (b < 0))); }
+    static ll ceil_div(ll a, ll b) { return -floor_div(-a, b); }
+    // x * 10^d を整数にする。誤差で 2.9999999 になった 3 は 3 として扱う。
+    static ll round_scaled(long double x, bool up) {
+        const long double r = std::round(x);
+        if (std::fabs(x - r) < 1e-6L) return static_cast<ll>(r);
+        return static_cast<ll>(up ? std::ceil(x) : std::floor(x));
+    }
     std::uint64_t s_[4];
     ll cap_;
     std::vector<std::pair<std::string, ll>> tags_;  // 付けた順、(タグ, 回数)

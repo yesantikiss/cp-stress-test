@@ -109,6 +109,70 @@ int main() {
         assert(std::accumulate(q.begin(), q.end(), 0LL) == sum);
         for (ll x : q) assert(x >= 0);
     }
+    // sorted のオプション
+    for (int k = 0; k < 200; ++k) {
+        ll n = g.i(0, 30);
+        auto a = g.sorted(n, 1, 5);
+        assert(std::is_sorted(a.begin(), a.end()));
+        auto b = g.sorted(n, 1, 5, {.desc = true});
+        assert(std::is_sorted(b.rbegin(), b.rend()));
+        auto c = g.sorted(n, -3, n + g.i(-3, 5), {.strict = true});
+        for (ll i = 1; i < n; ++i) assert(c[i - 1] < c[i]);
+        auto e = g.sorted(n, 0, 1000000000LL, {.strict = true, .desc = true});
+        for (ll i = 1; i < n; ++i) assert(e[i - 1] > e[i]);
+    }
+    // seq: 全形状とタグ
+    for (auto shape : {SeqShape::mixed, SeqShape::random, SeqShape::same, SeqShape::few, SeqShape::asc,
+                       SeqShape::desc, SeqShape::edge}) {
+        for (int k = 0; k < 100; ++k) {
+            ll n = g.i(0, 20);
+            auto a = g.seq(n, 3, 9, {.shape = shape});
+            assert((ll)a.size() == n);
+            for (ll x : a) assert(3 <= x && x <= 9);
+            std::set<ll> st(a.begin(), a.end());
+            if (shape == SeqShape::same) assert(st.size() <= 1);
+            if (shape == SeqShape::few) assert(st.size() <= 3);
+            if (shape == SeqShape::asc) assert(std::is_sorted(a.begin(), a.end()));
+            if (shape == SeqShape::desc) assert(std::is_sorted(a.rbegin(), a.rend()));
+            if (shape == SeqShape::edge) for (ll x : a) assert(x == 3 || x == 9);
+        }
+    }
+    {
+        Gen t(5);
+        t.seq(10, Range{1, 2});
+        assert(t.tags().size() == 1 && t.tags()[0].first.rfind("seq=", 0) == 0);
+        Gen u(5);
+        u.seq(10, 1, 2, {.shape = SeqShape::asc});
+        assert(u.tags().empty());
+    }
+    // decimal
+    {
+        auto digits_after_point = [](const std::string& s) {
+            auto p = s.find('.');
+            return p == std::string::npos ? 0LL : (ll)(s.size() - p - 1);
+        };
+        std::set<ll> lens;
+        for (int k = 0; k < 2000; ++k) {
+            auto s = g.decimal(-1.5, 2.25, 3);
+            double x = std::stod(s);
+            assert(-1.5 - 1e-9 <= x && x <= 2.25 + 1e-9);
+            ll len = digits_after_point(s);
+            assert(len <= 3);
+            if (len > 0) assert(s.back() != '0');
+            assert(s != "-0");
+            lens.insert(len);
+            auto e = g.decimal(-1.5, 2.25, 3, {.exact = true});
+            assert(digits_after_point(e) == 3);
+            double y = std::stod(e);
+            assert(-1.5 - 1e-9 <= y && y <= 2.25 + 1e-9);
+        }
+        assert(lens.size() == 4);  // 0..3 桁がすべて出る
+        assert(g.decimal(0.1, 0.1, 1, {.exact = true}) == "0.1");
+        assert(g.decimal(0.1, 0.1, 3, {.exact = true}) == "0.100");
+        assert(g.decimal(-0.05, -0.05, 2) == "-0.05");
+        assert(g.decimal(7, 7, 0, {.exact = true}) == "7");
+        assert(g.decimal(0.11, 0.19, 2).size() == 4);  // 0.1 は範囲外なので 2 桁に上がる
+    }
     // 木: 全形状
     for (auto shape : {TreeShape::mixed, TreeShape::random, TreeShape::path, TreeShape::star,
                        TreeShape::caterpillar, TreeShape::binary, TreeShape::deep}) {

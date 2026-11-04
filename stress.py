@@ -772,7 +772,13 @@ def cmd_run(opt: argparse.Namespace) -> int:
     base = opt.seed if opt.seed is not None else int.from_bytes(os.urandom(8), "little")
     start = time.monotonic()
     deadline = start + opt.time if opt.time else math.inf
-    total = opt.iters if not opt.time else None
+    # -n / -t を書かなかったときは、STRESS_BIG の生成器を 1 つにつき --big-iters 回で止める
+    big_limit = opt.big_iters if opt.iters is None and not opt.time else None
+    iters = opt.iters if opt.iters is not None else 1000
+    limited = {n for n in gens if n in progs.big} if big_limit is not None else set()
+    if limited and len(limited) == len(gens):
+        iters = min(iters, big_limit * len(gens))
+    total = iters if not opt.time else None
     mode = mode_name(opt) if mode_name(opt) != "compare" else f"compare/{opt.cmp}"
     Out.log(Out.dim(f"mode={mode} gens={','.join(gens)} base_seed={base} tl={opt.tl}s"))
 
@@ -780,9 +786,17 @@ def cmd_run(opt: argparse.Namespace) -> int:
     most_queries: tuple[int, int] | None = None
     k = 0
     last_status = 0.0
+    done = {n: 0 for n in gens}
+    active = list(gens)
     while (total is None or k < total) and time.monotonic() < deadline:
         # 生成器は順番に回し、cap は生成器ごとに小さい方から増やす
-        case = Case(case_seed(base, k), cap_for(k // len(gens), opt.max_cap), gens[k % len(gens)])
+        name = active[k % len(active)]
+        case = Case(case_seed(base, k), cap_for(done[name], opt.max_cap), name)
+        done[name] += 1
+        if name in limited and done[name] >= big_limit:
+            active.remove(name)
+            if not active:
+                total = k + 1
         v = run_case(progs, case, run_dir, opt)
         slowest = max(slowest, v.elapsed)
         if v.queries and (most_queries is None or v.queries[0] > most_queries[0]):
@@ -998,7 +1012,9 @@ def parse(argv: list[str]) -> argparse.Namespace:
     add_common(p)
     p.add_argument("-g", "--gen", dest="gens", action="append", metavar="NAME",
                    help="使う生成器（複数可、カンマ区切りも可。省略時は STRESS_BIG 以外を順番に）")
-    p.add_argument("-n", "--iters", type=int, default=1000, help="回数 (default: 1000)")
+    p.add_argument("-n", "--iters", type=int, help="回数 (default: 1000)")
+    p.add_argument("--big-iters", type=int, default=20,
+                   help="-n / -t を書かないとき、STRESS_BIG の生成器 1 つあたりの回数 (default: 20)")
     p.add_argument("-t", "--time", type=float, help="回数の代わりに秒数で回す")
     p.add_argument("--seed", type=int, help="基準 seed（省略時はランダム）")
     p.add_argument("--max-cap", type=int, help="g.size() に渡す cap の上限")

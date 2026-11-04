@@ -44,6 +44,12 @@ if grep -q '"gen": "all_same"' .stress/last/meta.json; then echo "ok   multi_gen
 grep -q '"same"' .stress/last/meta.json && grep -q '^tags: same$' "$build_dir/multi_all_same.log" \
     && echo "ok   multi_tags" || { echo "FAIL multi_tags"; fail=1; }
 check multi_repro       1 st repro "$(python3 -c 'import json;print(json.load(open(".stress/last/meta.json"))["case"])')" --main main_same.cpp
+check multi_big         0 st --main main_ok.cpp -g max --seed 1
+grep -q 'OK  20 cases' "$build_dir/multi_big.log" && echo "ok   multi_big_default_20" || { echo "FAIL multi_big_default_20"; fail=1; }
+check multi_big_mixed   0 st --main main_ok.cpp -g random,max --seed 1 --big-iters 3
+grep -q 'OK  1000 cases' "$build_dir/multi_big_mixed.log" && echo "ok   multi_big_mixed_1000" || { echo "FAIL multi_big_mixed_1000"; fail=1; }
+check multi_big_n       0 st --main main_ok.cpp -g max --seed 1 -n 25
+grep -q 'OK  25 cases' "$build_dir/multi_big_n.log" && echo "ok   multi_big_explicit_n" || { echo "FAIL multi_big_explicit_n"; fail=1; }
 check make              0 st make max all_same -n 2 --seed 3 -o cases
 if [ "$(ls cases | wc -l)" -eq 4 ]; then echo "ok   make_files"; else echo "FAIL make_files"; fail=1; fi
 check bench_ok          0 st bench --main main_ok.cpp -n 1 --seed 3

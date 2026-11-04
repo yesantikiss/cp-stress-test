@@ -94,10 +94,10 @@ check inter_adaptive_ok    0 st -i interactor_adaptive.cpp --main main_ok.cpp -n
 check inter_adaptive_guess 1 st -i interactor_adaptive.cpp --main main_guess.cpp -n 300 --seed 1
 
 # examples/adaptive の例がそのまま通る
-for ex in guess sort tree coins; do
+for ex in guess sort tree arc184_a; do
     work4="$build_dir/example_$ex"
     rm -rf "$work4" && cp -r "$root/examples/adaptive/$ex" "$work4" && cd "$work4"
-    n=100; [ "$ex" = coins ] && n=10
+    n=100; [ "$ex" = arc184_a ] && n=10
     check "example_$ex" 0 st -i interactor.cpp -n "$n" --seed 1
 done
 

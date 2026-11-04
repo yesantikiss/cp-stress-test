@@ -235,6 +235,97 @@ int main() {
         auto s3 = g.str(5, [&] { return 'z'; });
         assert(s3 == "zzzzz");
     }
+    // 根付き木の親の列
+    for (int rep = 0; rep < 300; ++rep) {
+        for (auto shape : {TreeShape::mixed, TreeShape::random, TreeShape::path, TreeShape::star,
+                           TreeShape::caterpillar, TreeShape::binary, TreeShape::deep}) {
+            const ll n = g.uniform(1, 30);
+            auto p = g.parents(n, {.shape = shape});
+            assert((ll)p.size() == n - 1);
+            for (ll i = 2; i <= n; ++i) assert(1 <= p[i - 2] && p[i - 2] < i);
+            for (ll base : {1, 0}) {
+                g.one_indexed = base == 1;
+                auto q = g.parents(n, {.shape = shape, .ordered = false});
+                assert((ll)q.size() == n);
+                ll roots = 0;
+                for (ll v = 0; v < n; ++v) {
+                    if (q[v] == base - 1) { ++roots; continue; }
+                    assert(base <= q[v] && q[v] < n + base && q[v] - base != v);
+                }
+                assert(roots == 1);
+                for (ll v = 0; v < n; ++v) {  // 根までたどれる（閉路なし）
+                    ll x = v, steps = 0;
+                    while (q[x] != base - 1) x = q[x] - base, assert(++steps <= n);
+                }
+                g.one_indexed = true;
+            }
+        }
+    }
+    {
+        Gen a(7), b(7);
+        assert(a.parents(50) == b.parents(50));
+    }
+    // 巨大整数
+    {
+        auto val_less = [](const std::string& x, const std::string& y, std::string_view d) {
+            if (x.size() != y.size()) return x.size() < y.size();
+            for (size_t k = 0; k < x.size(); ++k)
+                if (x[k] != y[k]) return d.find(x[k]) < d.find(y[k]);
+            return false;
+        };
+        for (int rep = 0; rep < 2000; ++rep) {
+            auto s = g.big(g.uniform(1, 40));
+            assert(s.size() == 1 || s[0] != '0');
+            for (char c : s) assert('0' <= c && c <= '9');
+            auto h = g.big(5, {.digits = digits::HEX, .lead_zero = true});
+            for (char c : h) assert(digits::HEX.find(c) != std::string_view::npos);
+        }
+        bool seen_lead_zero = false, seen_short = false, seen_max = false, seen_small = false;
+        const std::string max100 = "1" + std::string(100, '0');
+        for (int rep = 0; rep < 5000; ++rep) {
+            auto x = g.big_range("1", "1e100");
+            assert(x[0] != '0' && !val_less(x, "1", digits::dec) && !val_less(max100, x, digits::dec));
+            seen_short |= x.size() <= 3;
+            seen_max |= x == max100;
+            auto y = g.big(3, {.lead_zero = true});
+            seen_lead_zero |= y[0] == '0';
+            auto z = g.big_range("255", "4096", {.digits = digits::hex});
+            assert(!val_less(z, "ff", digits::hex) && !val_less("1000", z, digits::hex));
+            auto w = g.big_range("0", "1", {.digits = digits::bin});
+            assert(w == "0" || w == "1");
+            seen_small |= w == "0";
+            auto v = g.big_range("123456789", "123456790");
+            assert(v == "123456789" || v == "123456790");
+            assert(g.big_range("0007", "7") == "7");
+        }
+        assert(seen_lead_zero && seen_short && seen_max && seen_small);
+        // 範囲の書き方と進数の変換
+        auto conv = [&](unsigned long long v, std::string_view d) {
+            std::string r;
+            do r += d[v % d.size()], v /= d.size();
+            while (v > 0);
+            return std::string(r.rbegin(), r.rend());
+        };
+        for (int rep = 0; rep < 2000; ++rep) {
+            const unsigned long long v = g.uniform(0, LLONG_MAX) >> g.uniform(0, 62);
+            const auto vs = std::to_string(v);
+            for (auto d : {digits::bin, digits::oct, digits::dec, digits::hex, digits::HEX, digits::base36})
+                assert(g.big_range(vs, vs, {.digits = d}) == conv(v, d));
+        }
+        assert(g.big_range("2^60-1", "2^60-1", {.digits = digits::bin}) == std::string(60, '1'));
+        assert(g.big_range("2^60", "2^60") == "1152921504606846976");
+        assert(g.big_range("1e18", "1e18", {.digits = digits::hex}) == "de0b6b3a7640000");
+        assert(g.big_range("1e18-1", "1e18-1") == std::string(18, '9'));
+        assert(g.big_range("3^40", "3^40", {.digits = digits::hex}) == conv(12157665459056928801ULL, digits::hex));
+        assert(g.big_range("1e40", "1e40", {.digits = digits::hex}) == "1d6329f1c35ca4bfabb9f5610000000000");
+        assert(g.big_range("0e5", "0") == "0");
+        {
+            for (int rep = 0; rep < 200; ++rep) {
+                auto x = g.big_range("0", "16^200000-1", {.digits = digits::hex});
+                assert(x.size() <= 200000 && (x.size() == 1 || x[0] != '0'));
+            }
+        }
+    }
     // 出力
     {
         Gen o(0);

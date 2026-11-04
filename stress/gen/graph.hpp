@@ -1,6 +1,6 @@
 #pragma once
 
-// 木とグラフ: tree / graph / dag / bipartite
+// 木とグラフ: tree / parents / graph / dag / bipartite
 
 #include "core.hpp"
 
@@ -19,6 +19,11 @@ struct Edges : std::vector<Edge> {
 struct TreeOpt {
     TreeShape shape = TreeShape::mixed;
     Value w{};
+};
+
+struct ParentOpt {
+    TreeShape shape = TreeShape::mixed;
+    bool ordered = true;  // true なら P_i < i で、根を除いた n-1 個を返す
 };
 
 struct GraphOpt {
@@ -50,40 +55,57 @@ class GraphOps {
 
     Edges tree(ll n, TreeOpt opt = {}) {
         if (n <= 0) gen_error("tree: n must be positive");
-        TreeShape shape = opt.shape;
-        if (shape == TreeShape::mixed) {
-            static constexpr TreeShape all[] = {TreeShape::random, TreeShape::random, TreeShape::path,
-                                                TreeShape::star, TreeShape::caterpillar, TreeShape::binary,
-                                                TreeShape::deep};
-            shape = all[self().uniform(0, std::size(all) - 1)];
-        }
-        std::vector<std::pair<ll, ll>> raw;  // 0-indexed, 作った順
-        raw.reserve(n > 0 ? n - 1 : 0);
-        switch (shape) {
-            case TreeShape::random: raw = prufer_tree(n); break;
-            case TreeShape::path:
-                for (ll v = 1; v < n; ++v) raw.push_back({v - 1, v});
-                break;
-            case TreeShape::star:
-                for (ll v = 1; v < n; ++v) raw.push_back({0, v});
-                break;
-            case TreeShape::caterpillar: {
-                const ll spine = std::max<ll>(1, self().uniform(1, std::max<ll>(1, n / 2)));
-                for (ll v = 1; v < spine; ++v) raw.push_back({v - 1, v});
-                for (ll v = spine; v < n; ++v) raw.push_back({self().uniform(0, spine - 1), v});
-                break;
-            }
-            case TreeShape::binary:
-                for (ll v = 1; v < n; ++v) raw.push_back({(v - 1) / 2, v});
-                break;
-            case TreeShape::deep: {
-                const ll width = self().uniform(1, 3);
-                for (ll v = 1; v < n; ++v) raw.push_back({self().uniform(std::max<ll>(0, v - width), v - 1), v});
-                break;
-            }
-            case TreeShape::mixed: break;
-        }
+        auto raw = raw_tree(n, opt.shape);
         return finish_edges(n, raw, opt.w, /*shuffle_labels=*/true, /*directed=*/false);
+    }
+
+    // 根付き木の親の列。
+    //   ordered = true : 根が 1 で P_i < i。P_2 .. P_n の n-1 個を返す。
+    //   ordered = false: 番号はシャッフル、根もランダム。n 個を返し、根の親は base() - 1（0 か -1）。
+    std::vector<ll> parents(ll n, ParentOpt opt = {}) {
+        if (n <= 0) gen_error("parents: n must be positive");
+        auto raw = raw_tree(n, opt.shape);
+        std::vector<std::vector<ll>> adj(n);
+        for (auto [u, v] : raw) adj[u].push_back(v), adj[v].push_back(u);
+        // path や deep は頂点 0 を根にすると深くなるので、半々で 0 を根にする。
+        const ll root = self().coin() ? 0 : self().uniform(0, n - 1);
+        std::vector<ll> par(n, -1), order;  // order: 親が子より先に来る順
+        order.reserve(n);
+        if (opt.ordered) {
+            // 根から、まだ番号のない子をランダムに選びながら番号を振る（ランダムなトポ順）。
+            std::vector<ll> frontier{root};
+            std::vector<char> seen(n, 0);
+            seen[root] = 1;
+            while (!frontier.empty()) {
+                const ll k = self().uniform(0, static_cast<ll>(frontier.size()) - 1);
+                std::swap(frontier[k], frontier.back());
+                const ll v = frontier.back();
+                frontier.pop_back();
+                order.push_back(v);
+                for (ll c : adj[v])
+                    if (!seen[c]) seen[c] = 1, par[c] = v, frontier.push_back(c);
+            }
+            std::vector<ll> label(n);
+            for (ll k = 0; k < n; ++k) label[order[k]] = k;
+            std::vector<ll> p(n - 1);
+            for (ll k = 1; k < n; ++k) p[k - 1] = label[par[order[k]]] + self().base();
+            return p;
+        }
+        std::vector<ll> stack{root};
+        std::vector<char> seen(n, 0);
+        seen[root] = 1;
+        while (!stack.empty()) {
+            const ll v = stack.back();
+            stack.pop_back();
+            for (ll c : adj[v])
+                if (!seen[c]) seen[c] = 1, par[c] = v, stack.push_back(c);
+        }
+        std::vector<ll> label(n);
+        std::iota(label.begin(), label.end(), 0);
+        self().shuffle(label);
+        std::vector<ll> p(n);
+        for (ll v = 0; v < n; ++v) p[label[v]] = par[v] < 0 ? self().base() - 1 : label[par[v]] + self().base();
+        return p;
     }
 
     Edges graph(ll n, ll m, GraphOpt opt = {}) {
@@ -231,6 +253,44 @@ class GraphOps {
     }
 
   private:
+    // 形 shape_in の木の辺（0 始まり、作った順）。
+    std::vector<std::pair<ll, ll>> raw_tree(ll n, TreeShape shape_in) {
+        TreeShape shape = shape_in;
+        if (shape == TreeShape::mixed) {
+            static constexpr TreeShape all[] = {TreeShape::random, TreeShape::random, TreeShape::path,
+                                                TreeShape::star, TreeShape::caterpillar, TreeShape::binary,
+                                                TreeShape::deep};
+            shape = all[self().uniform(0, std::size(all) - 1)];
+        }
+        std::vector<std::pair<ll, ll>> raw;  // 0-indexed, 作った順
+        raw.reserve(n > 0 ? n - 1 : 0);
+        switch (shape) {
+            case TreeShape::random: raw = prufer_tree(n); break;
+            case TreeShape::path:
+                for (ll v = 1; v < n; ++v) raw.push_back({v - 1, v});
+                break;
+            case TreeShape::star:
+                for (ll v = 1; v < n; ++v) raw.push_back({0, v});
+                break;
+            case TreeShape::caterpillar: {
+                const ll spine = std::max<ll>(1, self().uniform(1, std::max<ll>(1, n / 2)));
+                for (ll v = 1; v < spine; ++v) raw.push_back({v - 1, v});
+                for (ll v = spine; v < n; ++v) raw.push_back({self().uniform(0, spine - 1), v});
+                break;
+            }
+            case TreeShape::binary:
+                for (ll v = 1; v < n; ++v) raw.push_back({(v - 1) / 2, v});
+                break;
+            case TreeShape::deep: {
+                const ll width = self().uniform(1, 3);
+                for (ll v = 1; v < n; ++v) raw.push_back({self().uniform(std::max<ll>(0, v - width), v - 1), v});
+                break;
+            }
+            case TreeShape::mixed: break;
+        }
+        return raw;
+    }
+
     // ランダムな全域木の辺（0 始まり、頂点番号はそのまま）。
     std::vector<std::pair<ll, ll>> spanning_tree(ll n) {
         std::vector<ll> label(n);

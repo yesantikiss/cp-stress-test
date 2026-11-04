@@ -31,10 +31,12 @@ STRESS_BIG(max) {                  // 最大ケース。st では使わず、st 
 | `vec(n, l, r)` `vec(n, Range{l, r})` `vec(n, [&]{...})` `sorted` `distinct` `perm` `partition(sum, k)` | 配列 |
 | `choice(v)` `shuffle(v)` | 選択 |
 | `tree(n, {.shape, .w})` | 木（random / path / star / caterpillar / binary / deep、省略時は混ぜる） |
+| `parents(n, {.shape, .ordered})` | 根付き木の親の列（既定は P_2 … P_n で P_i < i） |
 | `graph(n, m, {.connected, .simple, .directed, .w})` | グラフ |
 | `dag(n, m, {.connected, .simple, .increasing, .w})` | DAG |
 | `bipartite(n1, n2, m, {.connected, .simple, .merged, .w})` `bipartite(n, m, {...})` | 二部グラフ |
 | `str(n, "ab", {.shape})` `str(n, [&]{...})` `mutate(s, k)` `strs(k, total, "ab")` `grid(h, w, ".#")` | 文字列（random / periodic / palindrome / fibonacci / runs） |
+| `big(len, {.digits, .lead_zero})` `big_range("1", "1e100", {.digits})` | 巨大整数（文字列で返す） |
 | `out(...)` `out(edges)` `out_lines(v)` | 出力 |
 
 重み `.w` は `Range{l, r}` か、値を返すラムダ。頂点番号は既定で 1 始まり（`g.one_indexed = false` で 0 始まり）。
@@ -134,6 +136,33 @@ g.out(es);                                                  // 1 本 1 行で n-
 
 どの形でも、頂点番号はランダムに振り直し、辺の順番と各辺の `u v` の向きもシャッフルする。なので path でも `1-2-3-...` の順には出ない。根を 1 にしたい問題では、自分で番号を付け直す必要がある。
 
+## 根付き木（親の列）
+
+```cpp
+auto p = g.parents(n);                                      // P_2 .. P_n（n-1 個）、P_i < i
+g.out(p);                                                   // "1 1 2 3 ..." の 1 行
+auto p = g.parents(n, {.shape = TreeShape::path});
+auto p = g.parents(n, {.ordered = false});                  // n 個、根の親は 0
+```
+
+「頂点 i の親は P_i」の形で入力される根付き木を作る。`.shape` は `tree` と同じで、その形の木を作ってから根を決める。根は半々の確率で木を作ったときの最初の頂点（path や deep なら端）、それ以外はランダムな頂点にする。
+
+| オプション | 既定 | 意味 |
+| --- | --- | --- |
+| `.shape` | `TreeShape::mixed` | 木の形（[木](#木) の表と同じ） |
+| `.ordered` | `true` | `true` なら根を 1 にして、親が子より先に来るように番号を振る。返すのは P_2 .. P_n の n-1 個で、常に P_i < i |
+
+`.ordered = true` の番号は、根から始めて「親に番号が付いている頂点」の中からランダムに 1 つずつ選んで振る。なので path の形で根が端なら `1 2 3 ...` になるが、一般には BFS 順でも DFS 順でもない。
+
+`.ordered = false` なら番号をシャッフルし、根もどの番号になるか分からない。返すのは P_1 .. P_n の n 個で、根のところは `base() - 1`（1 始まりなら 0、0 始まりなら -1）。問題で根の親が -1 などと決まっているなら、その値に書き換えて出す。
+
+重み付き（「P_i W_i」など）の専用の形はない。ループで出す。
+
+```cpp
+auto p = g.parents(n);
+for (int i = 0; i < n - 1; ++i) g.out(p[i], g.i(1, 100));   // "P_i W_i" を n-1 行
+```
+
 ## グラフ
 
 ```cpp
@@ -201,7 +230,7 @@ for (auto e : g.tree(n)) g.out(e.u, e.v, g.choice("abc"));  // "u v c" を n-1 �
 
 ## 頂点番号
 
-`g.one_indexed` が `true`（既定）なら `tree` / `graph` / `dag` / `bipartite` / `perm` は 1 始まり、`false` なら 0 始まりになる。生成器の最初で `g.one_indexed = false;` と書けばその生成器の中で全部 0 始まりになる。
+`g.one_indexed` が `true`（既定）なら `tree` / `parents` / `graph` / `dag` / `bipartite` / `perm` は 1 始まり、`false` なら 0 始まりになる。生成器の最初で `g.one_indexed = false;` と書けばその生成器の中で全部 0 始まりになる。
 
 ## 文字列
 
@@ -230,6 +259,64 @@ periodic は書き換えが入るので、ちょうど周期的とは限らな�
 - `g.strs(k, total, alphabet, {.shape})`: k 個の文字列。長さの総和を `i(k, total)` で決めて、各長さが 1 以上になるように `partition` で分ける。`total < k` だとエラー。
 - `g.grid(h, w, ".#")`: h 行 w 列のグリッド（`vector<string>`）。各マスを一様に選ぶ。ラムダも渡せる。
 
+## 巨大整数
+
+```cpp
+auto s = g.big(100);                                        // ちょうど 100 桁の 10 進数
+auto s = g.big(5, {.lead_zero = true});                     // "00731" なども出る
+auto s = g.big(8, {.digits = digits::HEX});                 // 16 進、大文字
+auto s = g.big_range("1", "1e100");                         // 1 以上 10^100 以下
+auto s = g.big_range("0", "2^60-1", {.digits = digits::bin});   // 60 桁以下の 2 進
+auto s = g.big_range("1", "1e18", {.digits = digits::hex});      // 範囲は 10 進、出力は 16 進
+```
+
+どちらも `std::string` で返す。`g.out(s)` でそのまま出せる。
+
+`big(len)` はちょうど len 桁の数を作る。各桁は一様で、`.lead_zero = false`（既定）なら先頭の桁は 0 にしない。ただし len = 1 なら `"0"` も出る。
+
+`big_range(lo, hi)` は閉区間 `[lo, hi]` の数を作る。値で一様に選ぶとほとんどが最大桁数になってしまうので、先に桁数を一様に選び、その桁数の中で上の桁から順に選ぶ（値としては厳密な一様ではない）。1/8 の確率で端の値を返す。端の値は `lo`、`lo + 1`、`hi - 1`、`hi` と、範囲に入る b^k と b^k - 1（10 進なら `1000…0` と `999…9`）から選ぶ。
+
+- 結果に先頭の 0 は付かない。`lo > hi` だとエラー。
+- 負の数は扱わない。必要なら `(g.coin() ? "-" : "") + s` のように自分で付ける（`"-0"` に注意）。
+
+### 範囲の書き方
+
+`.digits` は出力の進数だけを決める。`lo` と `hi` はどの進数でも下の形で書く。問題文の制約はふつう 10 進や累乗で書かれているので、それをそのまま写せばいい。
+
+| 書き方 | 意味 | 例 |
+| --- | --- | --- |
+| `123` | 10 進の整数（先頭の 0 はあってもいい） | `"0"` `"1000000007"` |
+| `AeK` | A × 10^K（A は 10 進の整数） | `"1e18"` `"2e5"` |
+| `B^K` | B^K（B は 2 以上、B と K は 10 進の整数） | `"2^60"` `"16^200000"` |
+| 上のどれか + `-1` | 1 を引いた数 | `"2^60-1"` `"1e18-1"` |
+
+読めるのはこの形だけで、式のパーサではない（`2^60+5` や `(10^9+7)*2`、階乗などは書けない）。それ以外の値は 10 進の数字で直接書く。形が違うとエラーになる。
+
+### 計算量
+
+範囲の文字列は呼ぶたびに出力の進数に変換する。計算量は次の通り（D は範囲を 10 進で書いたときの桁数、L は出力の進数での桁数）。
+
+| 場合 | 計算量 | 目安（-O2） |
+| --- | --- | --- |
+| 出力が 10 進（`123` / `AeK`） | O(D) | 一瞬 |
+| `B^K` で B が出力の進数と同じ（hex 出力で `16^K` など） | O(K) | `16^200000-1` で 1 回 3 ms ほど |
+| それ以外（10 進の数を b 進にする、B が違う `B^K`） | O(D × L / 18)、つまり桁数の 2 乗 | 1 万桁で 15 ms、10 万桁で 1.5 秒 |
+
+なので数万桁を超える範囲を 10 進以外で出したいときは、出力と同じ底の `B^K` で書く。乱数で 1 個作る部分はどの場合も O(L)。
+
+`.digits` は使う数字を値の小さい順に並べた文字列で、長さが進数になる。用意してある定数:
+
+| 定数 | 中身 |
+| --- | --- |
+| `digits::bin` | `01` |
+| `digits::oct` | `01234567` |
+| `digits::dec`（既定） | `0123456789` |
+| `digits::hex` | `0123456789abcdef` |
+| `digits::HEX` | `0123456789ABCDEF` |
+| `digits::base36` | `0123456789abcdefghijklmnopqrstuvwxyz` |
+
+ほかの並びも文字列で直接渡せる（`{.digits = "0123456789ABCDEFGHIJ"}` で 20 進など）。2 文字以上必要。
+
 ## 出力
 
 | 関数 | 出力 |
@@ -250,3 +337,29 @@ g.out_lines(grid);
 - `char` はそのまま 1 文字、`bool` は `1` / `0`、実数は値を表せる一番短い形（`std::to_chars`）で出る。
 - `Edges` と `vector<string>` は他の値と並べて `out(...)` に入れられない（コンパイルエラーになる）。それぞれ `out(es)` と `out_lines(v)` で単独で出す。
 - 出力はバッファにためて、生成器が終わったときにまとめて書き出す。
+
+## 前の答えで復号するクエリ
+
+「クエリは前のクエリの答え last を使って l = l' xor last のように復号する」形式の問題は、gen.cpp の中で愚直に答えを計算しながら、暗号化したクエリを出せばいい。ドライバの設定は普通の問題と同じで、main も愚直解も暗号化された入力を読む。
+
+```cpp
+// 区間和。l = l' xor last, r = r' xor last（last は前の答え、最初は 0）
+STRESS_GEN(online) {
+    int n = g.size(1, 8), q = g.size(1, 8);
+    auto a = g.vec(n, 1, 10);
+    g.out(n, q);
+    g.out(a);
+    long long last = 0;
+    for (int k = 0; k < q; ++k) {
+        long long l = g.i(1, n), r = g.i(1, n);
+        if (l > r) std::swap(l, r);
+        g.out(l ^ last, r ^ last);                          // 暗号化して出す
+        last = 0;                                           // 愚直に答えを求める
+        for (long long i = l; i <= r; ++i) last += a[i - 1];
+    }
+}
+```
+
+- gen の中の答えが正しくないと、正しい解でも復号した値が範囲外になる。gen の答えの計算は愚直解と同じくらい単純に書く。
+- main が途中で答えを間違えると、そこから先は main の復号がずれる。出力は食い違うので、失敗としてちゃんと見つかる。最初に食い違った行がバグのあるクエリになる。
+- 答えを mod で取る、答えが無いときは -1 を使う、など last の決め方は問題に合わせて書く。

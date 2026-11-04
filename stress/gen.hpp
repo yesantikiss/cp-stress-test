@@ -16,11 +16,13 @@
 // 中身はファイルごとに分かれている:
 //   gen/core.hpp    乱数、i / uniform / size / real / coin / choice / shuffle、Range
 //   gen/array.hpp   vec / sorted / distinct / perm / partition
-//   gen/graph.hpp   tree / graph
+//   gen/graph.hpp   tree / parents / graph / dag / bipartite
+//   gen/big.hpp     big / big_range、digits::*
 //   gen/string.hpp  str / mutate / strs / grid
 //   gen/output.hpp  out / out_lines / raw
 
 #include "gen/array.hpp"
+#include "gen/big.hpp"
 #include "gen/core.hpp"
 #include "gen/graph.hpp"
 #include "gen/output.hpp"
@@ -31,6 +33,7 @@ namespace stress {
 class Gen : public Core,
             public ArrayOps<Gen>,
             public GraphOps<Gen>,
+            public BigOps<Gen>,
             public StringOps<Gen>,
             public Output {
   public:
@@ -39,6 +42,7 @@ class Gen : public Core,
 
 }  // namespace stress
 
+namespace digits = stress::digits;
 using stress::Edges;
 using stress::Gen;
 using stress::Range;

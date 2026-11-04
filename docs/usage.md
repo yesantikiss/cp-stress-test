@@ -54,6 +54,7 @@ saved: .stress/fail/20261103-151233-WA-random-0021a6c1f0e4b5e9   (st last --to-i
 | --- | --- |
 | `-n N` `--iters N` | 回数（既定 1000） |
 | `-t SEC` `--time SEC` | 回数の代わりに秒数で回す |
+| `--big-iters N` | `-n` も `-t` も書かないとき、STRESS_BIG の生成器 1 つあたりの回数（既定 20）。STRESS_BIG だけを回すときは合計もこの回数で止まる |
 | `--seed N` | 基準 seed（省略時はランダム。最後に `base_seed=...` と出る） |
 | `-g NAME` `--gen NAME` | 使う生成器。複数書ける、カンマ区切りも可。省略時は STRESS_BIG 以外を全部 |
 | `--max-cap N` | cap の上限（[seed と cap](#seed-と-cap)） |

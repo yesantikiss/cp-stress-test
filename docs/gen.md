@@ -25,21 +25,18 @@ STRESS_BIG(max) {                  // 最大ケース。st では使わず、st 
 
 `st` は STRESS_GEN を順番に混ぜて回し、失敗したらどの生成器かも出す。生成器が 1 つでいいなら、今まで通り `void gen(Gen& g) { ... }` と書いてもいい（名前は `gen` になる）。
 
-| 関数 | 内容 |
+| 種類 | 関数 |
 | --- | --- |
-| `i(l, r)` `uniform(l, r)` `size(l, r)` `real(l, r)` `decimal(l, r, d)` `coin(p)` | 乱数 |
-| `vec(n, l, r)` `vec(n, Range{l, r})` `vec(n, [&]{...})` `seq(n, l, r, {.shape})` `sorted(n, l, r, {.strict, .desc})` `distinct` `perm` `partition(sum, k)` | 配列（seq は random / same / few / asc / desc / edge、省略時は混ぜる） |
-| `choice(v)` `shuffle(v)` | 選択 |
-| `tree(n, {.shape, .w})` | 木（random / path / star / caterpillar / binary / deep、省略時は混ぜる） |
-| `parents(n, {.shape, .ordered})` | 根付き木の親の列（既定は P_2 … P_n で P_i < i） |
-| `graph(n, m, {.shape, .connected, .simple, .w})` | 無向グラフ（random / bipartite / pieces / hub / path、省略時は混ぜる） |
-| `digraph(n, m, {.shape, .reach, .simple, .w})` | 有向グラフ（random / dag / pieces / hub / path、省略時は混ぜる）。`.reach` で弱連結、頂点 1 から到達可能、強連結 |
-| `dag(n, m, {.reach, .simple, .increasing, .w})` | DAG |
-| `bipartite(n1, n2, m, {.connected, .simple, .merged, .w})` `bipartite(n, m, {...})` | 二部グラフ |
-| `str(n, "ab", {.shape})` `str(n, [&]{...})` `mutate(s, k)` `strs(k, total, "ab")` `grid(h, w, ".#")` | 文字列（random / periodic / palindrome / fibonacci / runs） |
-| `big(len, {.digits, .lead_zero})` `big_range("1", "1e100", {.digits})` | 巨大整数（文字列で返す） |
-| `out(...)` `out(edges)` `out_lines(v)` | 出力 |
-| `tag("name")` | ケースにタグを付ける（失敗時に表示される） |
+| [整数の乱数](#整数の乱数) | `i(l, r)` `uniform(l, r)` `size(l, r)` |
+| [実数と確率](#実数と確率) | `real(l, r)` `decimal(l, r, d, {...})` `coin(p)` |
+| [選択と並べ替え](#選択と並べ替え) | `choice(v)` `shuffle(v)` |
+| [配列](#配列) | `vec(n, l, r)` `seq(n, l, r, {...})` `sorted(n, l, r, {...})` `distinct(n, l, r)` `perm(n)` `partition(sum, k)` |
+| [木](#木) | `tree(n, {...})` `parents(n, {...})` |
+| [グラフ](#グラフ) | `graph(n, m, {...})` `digraph(n, m, {...})` `dag(n, m, {...})` `bipartite(n1, n2, m, {...})` |
+| [文字列](#文字列) | `str(n, "ab", {...})` `mutate(s, k)` `strs(k, total, "ab", {...})` `grid(h, w, ".#")` |
+| [巨大整数](#巨大整数) | `big(len, {...})` `big_range("1", "1e100", {...})`（文字列で返す） |
+| [出力](#出力) | `out(...)` `out(edges)` `out_lines(v)` `raw(s)` |
+| [タグ](#タグ) | `tag("name")`（失敗時に表示される） |
 
 重み `.w` は `Range{l, r}` か、値を返すラムダ。頂点番号は既定で 1 始まり（`g.one_indexed = false` で 0 始まり）。
 
@@ -58,6 +55,7 @@ STRESS_BIG(max) {                  // 最大ケース。st では使わず、st 
 | --- | --- | --- |
 | `g.uniform(lo, hi)` | 閉区間 `[lo, hi]` | 一様（偏りなし） |
 | `g.i(lo, hi)` `g.i(Range{lo, hi})` | 閉区間 `[lo, hi]` | 1/8 の確率で端の値、残りは一様 |
+| `g.size(lo, hi)` | `[lo, max(lo, min(hi, cap))]` | `i` と同じ（[サイズと cap](#サイズと-cap)） |
 
 `i` は端の値を出やすくしてある。1/8 の確率で `lo`、`lo + 1`、`hi - 1`、`hi` のどれかを等確率で返し、残りの 7/8 で `uniform(lo, hi)` を返す。たとえば `i(1, 1000000000)` では `1` や `1000000000` がだいたい 1/32 の確率で出る。境界のバグを見つけたいときは `i`、値の分布を本当に一様にしたいときは `uniform` を使う。
 
@@ -79,8 +77,11 @@ cap は `size` にしか効かない。`g.i(1, 8)` で N を決めると、最�
 
 ## 実数と確率
 
-- `g.real(lo, hi)`: 半開区間 `[lo, hi)` の一様な実数（53 bit 精度）。`i` のような端の偏りはない。gen.cpp の中の計算用で、そのまま `out` すると `0.7234912873457213` のような最短表記になる。
-- `g.decimal(lo, hi, d)`: 閉区間 `[lo, hi]` の小数を文字列で返す。入力に小数を出すときはこちら。
+| 関数 | 返すもの |
+| --- | --- |
+| `g.real(lo, hi)` | 半開区間 `[lo, hi)` の一様な実数（53 bit 精度）。gen.cpp の中の計算用 |
+| `g.decimal(lo, hi, d, {...})` | 閉区間 `[lo, hi]` の小数を文字列で返す。入力に小数を出すときはこちら |
+| `g.coin(p)` | 確率 `p` で `true`。`p` を省略すると 0.5 |
 
 ```cpp
 g.decimal(0, 100, 2);                    // 小数点以下 2 桁以下: "37" "4.5" "99.25" など
@@ -88,16 +89,21 @@ g.decimal(0, 100, 2, {.exact = true});   // ちょうど 2 桁: "37.00" "4.50" "
 g.decimal(-1.5, 1.5, 3);                 // 負の数もいい: "-0.125" "1.5" など
 ```
 
-- 既定は「小数点以下 d 桁以下」で、末尾の 0 は付けない（整数なら小数点も付けない）。先に桁数を 0〜d から一様に選んでから値を選ぶので、`37` や `4.5` のような短い形もよく出る。選んだ桁数の値が範囲に無いときは桁数を増やす。
-- `.exact = true` なら小数点以下ちょうど d 桁。
-- 値は `10^-d` 刻みで、`i` と同じく端が出やすい。`lo` `hi` は `10^-d` 刻みに丸める（`0.1` を `0.1000000000000000055…` として扱ったりはしない）。
-- `d` は 0〜18。`|lo|` と `|hi|` に `10^d` を掛けたものは 9e18 未満。範囲に `10^-d` 刻みの値が無いとエラー。
-- `g.coin(p)`: 確率 `p` で `true`。`p` を省略すると 0.5。
+| `decimal` のオプション | 既定 | 意味 |
+| --- | --- | --- |
+| `.exact` | `false` | `true` なら小数点以下ちょうど d 桁 |
+
+- `real`: `i` のような端の偏りはない。そのまま `out` すると `0.7234912873457213` のような最短表記になる。
+- `decimal`: 既定は「小数点以下 d 桁以下」で、末尾の 0 は付けない（整数なら小数点も付けない）。先に桁数を 0〜d から一様に選んでから値を選ぶので、`37` や `4.5` のような短い形もよく出る。選んだ桁数の値が範囲に無いときは桁数を増やす。
+- `decimal`: 値は `10^-d` 刻みで、`i` と同じく端が出やすい。`lo` `hi` は `10^-d` 刻みに丸める（`0.1` を `0.1000000000000000055…` として扱ったりはしない）。
+- `decimal`: `d` は 0〜18。`|lo|` と `|hi|` に `10^d` を掛けたものは 9e18 未満。範囲に `10^-d` 刻みの値が無いとエラー。
 
 ## 選択と並べ替え
 
-- `g.choice(v)`: `vector` から一様に 1 個選んで返す。`g.choice("abc")` のように文字列を渡すと 1 文字返す。空だとエラー。
-- `g.shuffle(v)`: `vector` か `string` をその場でシャッフルする（Fisher–Yates、全順列が等確率）。
+| 関数 | 動き |
+| --- | --- |
+| `g.choice(v)` | `vector` から一様に 1 個選んで返す。文字列を渡すと 1 文字返す。空だとエラー |
+| `g.shuffle(v)` | `vector` か `string` をその場でシャッフルする（Fisher–Yates、全順列が等確率） |
 
 ## 値の指定（Range とラムダ）
 
@@ -118,19 +124,21 @@ g.tree(n, {.w = [&] { return g.i(1, 5) * 2; }});          // 偶数の重み
 | --- | --- |
 | `g.vec(n, lo, hi)` `g.vec(n, Range{lo, hi})` | 長さ n、各要素を `g.i(lo, hi)` で独立に引く |
 | `g.vec(n, f)` | 長さ n、各要素を `f()` で引く |
-| `g.seq(n, lo, hi)` `g.seq(n, Range{lo, hi})` | 長さ n、形を混ぜた配列（下の表） |
-| `g.sorted(n, lo, hi)` | 広義単調増加（`vec(n, lo, hi)` をソートしたもの） |
-| `g.sorted(n, lo, hi, {.strict = true})` | 狭義単調増加（`distinct(n, lo, hi)` をソートしたもの） |
-| `g.sorted(n, lo, hi, {.desc = true})` | 減少。`.strict` と組み合わせられる |
+| `g.seq(n, lo, hi, {...})` | 長さ n、形を選んで作る配列（[seq の形](#seq-の形)） |
+| `g.sorted(n, lo, hi, {...})` | 単調な列。既定は広義増加（`vec` をソートしたもの） |
 | `g.distinct(n, lo, hi)` | `[lo, hi]` から相異なる n 個、順番はランダム |
 | `g.perm(n)` | 順列。1 始まりなら 1..n、`one_indexed = false` なら 0..n-1 |
 | `g.partition(sum, k, min_value = 0)` | 和が `sum` になる k 個の整数（各要素は `min_value` 以上） |
 
-注意点:
+| `sorted` のオプション | 既定 | 意味 |
+| --- | --- | --- |
+| `.strict` | `false` | `true` なら狭義（`distinct` をソートしたもの） |
+| `.desc` | `false` | `true` なら減少。`.strict` と組み合わせられる |
 
-- `vec` と `sorted` は `i` を使うので、`lo` や `hi` が重複して出やすい。`.strict` の `sorted` は `distinct` を使うので端の偏りはなく、範囲の中の値が n 個より少ないとエラー。
-- `distinct` は `uniform` を使うので端の偏りはない。範囲の中の値が n 個より少ないとエラー。
-- `partition` は `sum - min_value * k` を k 個に分ける区切り位置を一様に引いて作る。0 を含みたくないときは `min_value = 1`。`sum < min_value * k` だとエラー。
+- `vec` `sorted`: `i` を使うので、`lo` や `hi` が重複して出やすい。
+- `sorted`: `.strict` のときは `distinct` を使うので端の偏りはなく、範囲の中の値が n 個より少ないとエラー。
+- `distinct`: `uniform` を使うので端の偏りはない。範囲の中の値が n 個より少ないとエラー。
+- `partition`: `sum - min_value * k` を k 個に分ける区切り位置を一様に引いて作る。0 を含みたくないときは `min_value = 1`。`sum < min_value * k` だとエラー。
 
 ### seq の形
 
@@ -162,6 +170,15 @@ auto es = g.tree(n, {.shape = TreeShape::star, .w = Range{1, 100}});
 g.out(es);                                                  // 1 本 1 行で n-1 行
 ```
 
+| 関数 | 返すもの |
+| --- | --- |
+| `g.tree(n, {...})` | n 頂点の木の辺のリスト（n-1 本） |
+
+| オプション | 既定 | 意味 |
+| --- | --- | --- |
+| `.shape` | `TreeShape::mixed` | 木の形（下の表） |
+| `.w` | なし | 重み（Range かラムダ） |
+
 | `.shape` | 形 |
 | --- | --- |
 | `TreeShape::random` | Prüfer 列から作る一様ランダムな木 |
@@ -182,6 +199,10 @@ g.out(p);                                                   // "1 1 2 3 ..." の
 auto p = g.parents(n, {.shape = TreeShape::path});
 auto p = g.parents(n, {.ordered = false});                  // n 個、根の親は 0
 ```
+
+| 関数 | 返すもの |
+| --- | --- |
+| `g.parents(n, {...})` | 根付き木の親の列。既定は P_2 .. P_n の n-1 個で、P_i < i |
 
 「頂点 i の親は P_i」の形で入力される根付き木を作る。`.shape` は `tree` と同じで、その形の木を作ってから根を決める。根は半々の確率で木を作ったときの最初の頂点（path や deep なら端）、それ以外はランダムな頂点にする。
 
@@ -210,7 +231,11 @@ auto es = g.graph(n, m, {.simple = false});                 // 自己ループ�
 auto es = g.graph(n, m, {.shape = GraphShape::hub});        // 形を指定
 ```
 
-`graph` は無向グラフ。有向グラフは [有向グラフ](#有向グラフ) の `digraph` を使う。
+| 関数 | 返すもの |
+| --- | --- |
+| `g.graph(n, m, {...})` | n 頂点 m 辺の無向グラフの辺のリスト |
+
+有向グラフは [有向グラフ](#有向グラフ) の `digraph` を使う。
 
 | オプション | 既定 | 意味 |
 | --- | --- | --- |
@@ -246,7 +271,9 @@ auto es = g.digraph(n, m, {.reach = Reach::strong});        // 強連結
 auto es = g.digraph(n, m, {.shape = DigraphShape::dag, .reach = Reach::root});
 ```
 
-各辺 `u v` は u から v への辺。
+| 関数 | 返すもの |
+| --- | --- |
+| `g.digraph(n, m, {...})` | n 頂点 m 辺の有向グラフの辺のリスト。各辺 `u v` は u から v への辺 |
 
 | オプション | 既定 | 意味 |
 | --- | --- | --- |
@@ -293,6 +320,10 @@ auto es = g.dag(n, m, {.reach = Reach::root});              // 頂点 1 から�
 auto es = g.dag(n, m, {.increasing = true});                // 常に u < v
 ```
 
+| 関数 | 返すもの |
+| --- | --- |
+| `g.dag(n, m, {...})` | n 頂点 m 辺の DAG の辺のリスト |
+
 ランダムなトポ順を作り、トポ順で前の頂点から後ろの頂点への辺だけを張る。頂点番号と辺の順番はシャッフルするので、出力からトポ順は分からない。
 
 | オプション | 既定 | 意味 |
@@ -312,9 +343,13 @@ auto es = g.bipartite(n1, n2, m, {.merged = true});         // n1+n2 頂点の�
 auto es = g.bipartite(n, m, {.connected = true});           // 総頂点数だけ指定
 ```
 
-`bipartite(n1, n2, m)` は既定で左右に別々の番号を振る。各辺 `u v` の `u` が左（1 から n1）、`v` が右（1 から n2）で、マッチングの問題によくある入力形式になる。`.merged = true` にすると、n1+n2 頂点に通し番号をシャッフルして振り、各辺の向きもランダムにする。「二部グラフか判定せよ」のような、普通のグラフとして入力される問題向け。
+| 関数 | 返すもの |
+| --- | --- |
+| `g.bipartite(n1, n2, m, {...})` | 左 n1 頂点、右 n2 頂点、m 辺の二部グラフの辺のリスト |
+| `g.bipartite(n, m, {...})` | 総頂点数 n の二部グラフ。左右の大きさは m 本の辺が入る分け方からランダムに選ぶ |
 
-`bipartite(n, m)` は総頂点数だけ指定する版で、左右の大きさは m 本の辺が入る分け方からランダムに選ぶ。番号は常に通し番号（`.merged` は無視される）。
+- `bipartite(n1, n2, m)`: 既定で左右に別々の番号を振る。各辺 `u v` の `u` が左（1 から n1）、`v` が右（1 から n2）で、マッチングの問題によくある入力形式になる。`.merged = true` にすると、n1+n2 頂点に通し番号をシャッフルして振り、各辺の向きもランダムにする。「二部グラフか判定せよ」のような、普通のグラフとして入力される問題向け。
+- `bipartite(n, m)`: 番号は常に通し番号（`.merged` は無視される）。
 
 | オプション | 既定 | 意味 |
 | --- | --- | --- |
@@ -345,7 +380,15 @@ auto s = g.str(n, "abc", {.shape = StrShape::palindrome});
 auto s = g.str(n, [&] { return g.coin(0.1) ? 'b' : 'a'; });
 ```
 
-`str(n, alphabet)` は alphabet の文字だけを使った長さ n の文字列を返す。
+| 関数 | 返すもの |
+| --- | --- |
+| `g.str(n, alphabet, {...})` | alphabet の文字だけを使った長さ n の文字列 |
+| `g.str(n, f)` | 各文字を `f()` で引いた長さ n の文字列 |
+| `g.mutate(s, k, alphabet)` | s のランダムな位置を k 回書き換えた文字列。alphabet を省略すると s に出てくる文字から選ぶ |
+| `g.strs(k, total, alphabet, {...})` | k 個の文字列。長さの総和は `i(k, total)` |
+| `g.grid(h, w, ".#")` `g.grid(h, w, f)` | h 行 w 列のグリッド（`vector<string>`）。各マスを一様に選ぶか `f()` で引く |
+
+`str` と `strs` のオプションは `.shape` だけ。
 
 | `.shape` | 形 |
 | --- | --- |
@@ -356,13 +399,9 @@ auto s = g.str(n, [&] { return g.coin(0.1) ? 'b' : 'a'; });
 | `StrShape::runs` | 同じ文字の連続（ラン）を並べたもの。隣のランは違う文字 |
 | `StrShape::mixed`（省略時） | 上のどれかを選ぶ（random が 2/6、他は 1/6 ずつ） |
 
-periodic は書き換えが入るので、ちょうど周期的とは限らない（周期的に近いケースを作るため）。alphabet が 1 文字なら、どの形でも同じ文字の繰り返しになる。
-
-その他の関数:
-
-- `g.mutate(s, k, alphabet)`: s のランダムな位置を k 回書き換えた文字列を返す。同じ位置や同じ文字を選ぶこともあるので、実際に変わる文字数は k 以下。alphabet を省略すると s に出てくる文字から選ぶ。
-- `g.strs(k, total, alphabet, {.shape})`: k 個の文字列。長さの総和を `i(k, total)` で決めて、各長さが 1 以上になるように `partition` で分ける。`total < k` だとエラー。
-- `g.grid(h, w, ".#")`: h 行 w 列のグリッド（`vector<string>`）。各マスを一様に選ぶ。ラムダも渡せる。
+- `str`: periodic は書き換えが入るので、ちょうど周期的とは限らない（周期的に近いケースを作るため）。alphabet が 1 文字なら、どの形でも同じ文字の繰り返しになる。
+- `mutate`: 同じ位置や同じ文字を選ぶこともあるので、実際に変わる文字数は k 以下。
+- `strs`: 各長さが 1 以上になるように `partition` で分ける。`total < k` だとエラー。
 
 ## 巨大整数
 
@@ -375,13 +414,21 @@ auto s = g.big_range("0", "2^60-1", {.digits = digits::bin});   // 60 桁以下�
 auto s = g.big_range("1", "1e18", {.digits = digits::hex});      // 範囲は 10 進、出力は 16 進
 ```
 
-どちらも `std::string` で返す。`g.out(s)` でそのまま出せる。
+| 関数 | 返すもの |
+| --- | --- |
+| `g.big(len, {...})` | ちょうど len 桁の数（`std::string`） |
+| `g.big_range(lo, hi, {...})` | 閉区間 `[lo, hi]` の数（`std::string`）。`lo` `hi` の書き方は [範囲の書き方](#範囲の書き方) |
 
-`big(len)` はちょうど len 桁の数を作る。各桁は一様で、`.lead_zero = false`（既定）なら先頭の桁は 0 にしない。ただし len = 1 なら `"0"` も出る。
+| オプション | 既定 | 意味 |
+| --- | --- | --- |
+| `.digits` | `digits::dec` | 出力の進数（下の `digits::` の表）。`big` と `big_range` の両方 |
+| `.lead_zero` | `false` | `true` なら先頭の桁が 0 でもいい。`big` だけ |
 
-`big_range(lo, hi)` は閉区間 `[lo, hi]` の数を作る。値で一様に選ぶとほとんどが最大桁数になってしまうので、先に桁数を一様に選び、その桁数の中で上の桁から順に選ぶ（値としては厳密な一様ではない）。1/8 の確率で端の値を返す。端の値は `lo`、`lo + 1`、`hi - 1`、`hi` と、範囲に入る b^k と b^k - 1（10 進なら `1000…0` と `999…9`）から選ぶ。
+どちらも `g.out(s)` でそのまま出せる。
 
-- 結果に先頭の 0 は付かない。`lo > hi` だとエラー。
+- `big`: 各桁は一様で、`.lead_zero = false` なら先頭の桁は 0 にしない。ただし len = 1 なら `"0"` も出る。
+- `big_range`: 値で一様に選ぶとほとんどが最大桁数になってしまうので、先に桁数を一様に選び、その桁数の中で上の桁から順に選ぶ（値としては厳密な一様ではない）。1/8 の確率で端の値を返す。端の値は `lo`、`lo + 1`、`hi - 1`、`hi` と、範囲に入る b^k と b^k - 1（10 進なら `1000…0` と `999…9`）から選ぶ。
+- `big_range`: 結果に先頭の 0 は付かない。`lo > hi` だとエラー。
 - 負の数は扱わない。必要なら `(g.coin() ? "-" : "") + s` のように自分で付ける（`"-0"` に注意）。
 
 ### 範囲の書き方
@@ -464,7 +511,9 @@ mixed の形で選ばれたものは自動で付く。形を指定したとき�
 | `str=形` | `str` / `strs` で mixed が選んだ形 |
 | `seq=形` | `seq` で mixed が選んだ形 |
 
-自分で付けるときは `g.tag("名前")` を呼ぶ。生成器の中で分岐したときの目印などに使う。
+| 関数 | 動き |
+| --- | --- |
+| `g.tag(name)` | ケースにタグを付ける。生成器の中で分岐したときの目印などに使う |
 
 ```cpp
 STRESS_GEN(random) {

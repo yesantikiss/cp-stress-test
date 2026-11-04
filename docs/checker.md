@@ -217,5 +217,7 @@ int main(int argc, char** argv) {
 
 次のものは judge.hpp と interact.hpp の中で使っているだけで、checker から使うことは考えていない。
 
-- `Reader::stream`: パイプから逐次読む Reader を作る（interactor の `it.out`）
-- `judge_exit`、`kAccepted` `kWrong` `kJudgeFail`: 終了コードの定義と、メッセージを出して終わる関数
+| 名前 | 中身 |
+| --- | --- |
+| `Reader::stream` | パイプから逐次読む Reader を作る（interactor の `it.out`） |
+| `judge_exit` `kAccepted` `kWrong` `kJudgeFail` | 終了コードの定義と、メッセージを出して終わる関数 |

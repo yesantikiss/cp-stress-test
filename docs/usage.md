@@ -164,7 +164,16 @@ st make [NAME ...] [-n N] [--seed S] [--cap C] [-o DIR]
 st bench [NAME ...] [-n N] [--seed S] [--cap C] [--tl SEC] [--main SRC]
 ```
 
-生成した入力で main だけを走らせ、ケースごとの実行時間を出す。生成器の選び方、`--seed`、`--cap` は `st make` と同じで、`-n` の既定は 3。
+生成した入力で main だけを走らせ、ケースごとの実行時間を出す。
+
+| オプション | 内容 |
+| --- | --- |
+| `NAME ...` `--seed S` `--cap C` | `st make` と同じ |
+| `-n N` `--count N` | 生成器ごとの個数（既定 3） |
+| `--tl SEC` | 制限時間（既定 2 秒） |
+| `--main SRC` | 解答（既定 main.cpp） |
+
+ビルドのオプションも使える。
 
 - `--tl` の 8 割を超えたケースは黄色で出す。
 - TLE か RE が 1 つでもあれば終了コード 1、なければ一番遅かった時間を出して 0。
@@ -174,11 +183,19 @@ st bench [NAME ...] [-n N] [--seed S] [--cap C] [--tl SEC] [--main SRC]
 
 直前に保存した失敗（`.stress/last`）を、走らせたときと同じ形で表示する。
 
-`--to-in` を付けると、失敗した入力を in.txt にコピーする。`st run` や `st repro` を `--no-to-in` 付きで走らせたあとや、in.txt を書き換えたあとに使う。退避のしかたは自動の書き出しと同じ（[in.txt への書き出し](#intxt-への書き出し)）。
+| オプション | 内容 |
+| --- | --- |
+| `--to-in` | 失敗した入力を in.txt にコピーする |
+
+- `--to-in`: `st run` や `st repro` を `--no-to-in` 付きで走らせたあとや、in.txt を書き換えたあとに使う。退避のしかたは自動の書き出しと同じ（[in.txt への書き出し](#intxt-への書き出し)）。
 
 ## st restore
 
 `.stress/in.txt.bak` を in.txt に戻す。
+
+| オプション | 内容 |
+| --- | --- |
+| `--force` | 今の in.txt を手で書き換えていても上書きする |
 
 - 今の in.txt が st の書き出したものでなく（手で書き換えていて）、`.bak` とも違うときは、消さないように止まる。`--force` で上書きする。
 - 戻したあとの in.txt は手書きとして扱うので、次に失敗したときはまた `.bak` に退避する。
@@ -194,7 +211,11 @@ st bench [NAME ...] [-n N] [--seed S] [--cap C] [--tl SEC] [--main SRC]
 
 ## st clean
 
-`.stress/` の fail、run、last、bench、make を消す。`--all` を付けるとビルド済みのバイナリ（`.stress/bin/`）も消す。
+`.stress/` の fail、run、last、bench、make を消す。
+
+| オプション | 内容 |
+| --- | --- |
+| `--all` | ビルド済みのバイナリ（`.stress/bin/`）も消す |
 
 ## st init
 
@@ -207,15 +228,25 @@ st init -i         # gen.cpp と interactor.cpp
 st init gen2.cpp   # gen.cpp の雛形を gen2.cpp という名前で置く
 ```
 
-- 同じ名前のファイルがあれば飛ばす。`--force` で上書きする。
-- 名前を指定できるのは、置くファイルが gen.cpp だけのとき。`-c` や `-i` と一緒に書いた名前は無視する。
+| オプション | 内容 |
+| --- | --- |
+| `NAME` | 置くファイルの名前（gen.cpp だけを置くとき） |
+| `-c` `--checker` | checker.cpp の雛形も置く |
+| `-i` `--interactor` | interactor.cpp の雛形も置く |
+| `--force` | 同じ名前のファイルがあっても上書きする |
+
+- 同じ名前のファイルがあれば飛ばす。
+- `NAME`: `-c` や `-i` と一緒に書いた名前は無視する。
 
 ## ビルド
 
-main、愚直解、gen、checker、interactor を並列にビルドする。
+main、愚直解、gen、checker、interactor を並列にビルドする。フラグは `-std=gnu++20 -O2 -DLOCAL`。
 
-- フラグは `-std=gnu++20 -O2 -DLOCAL`。`--san` を付けると `-fsanitize=address,undefined -fno-omit-frame-pointer -g -D_GLIBCXX_DEBUG` を足す。
-- `--cxxflags "..."` か環境変数 `STRESS_CXXFLAGS` で、さらにフラグを足せる（`--cxxflags` が優先）。
+| オプション | 内容 |
+| --- | --- |
+| `--san` | `-fsanitize=address,undefined -fno-omit-frame-pointer -g -D_GLIBCXX_DEBUG` を足す |
+| `--cxxflags "..."` | さらにフラグを足す。環境変数 `STRESS_CXXFLAGS` でもいい（`--cxxflags` が優先） |
+
 - include パスには、stress-test のディレクトリ（`stress/gen.hpp` などを読むため）、ACL（問題のディレクトリか `~/atcoder` の `ac-library/`）、`$CP_LIBRARY_DIR`（既定 `~/cp-library`）を入れる。
 - 問題のディレクトリに `pch_acl.hpp.gch` があり、ソースが `#include <atcoder/...>` を含むときは、`-include pch_acl.hpp` を付けてプリコンパイル済みヘッダを使う。main と愚直解だけで、`--san` のときは使わない。
 - バイナリは `.stress/bin/<種類>-<ハッシュ>` に置く。ハッシュはソースのパスとフラグから作るので、`--san` の有無などで別のバイナリになる。

@@ -1,10 +1,21 @@
 #pragma once
 
-// 配列: vec / sorted / distinct / perm / partition
+// 配列: vec / seq / sorted / distinct / perm / partition
 
 #include "core.hpp"
 
 namespace stress {
+
+enum class SeqShape { mixed, random, same, few, asc, desc, edge };
+
+struct SeqOpt {
+    SeqShape shape = SeqShape::mixed;
+};
+
+struct SortedOpt {
+    bool strict = false;  // true なら狭義（同じ値なし）
+    bool desc = false;    // true なら降順
+};
 
 template <class G>
 class ArrayOps {
@@ -25,9 +36,37 @@ class ArrayOps {
         return a;
     }
 
-    std::vector<ll> sorted(ll n, ll lo, ll hi) {
-        auto a = vec(n, lo, hi);
-        std::sort(a.begin(), a.end());
+    // 形を混ぜた配列。mixed で選んだ形は "seq=形" のタグにする。
+    std::vector<ll> seq(ll n, ll lo, ll hi, SeqOpt opt = {}) { return seq(n, Range{lo, hi}, opt); }
+    std::vector<ll> seq(ll n, Range r, SeqOpt opt = {}) {
+        if (r.lo > r.hi) gen_error("seq: lo > hi (" + std::to_string(r.lo) + ", " + std::to_string(r.hi) + ")");
+        SeqShape shape = opt.shape;
+        if (shape == SeqShape::mixed) {
+            static constexpr SeqShape all[] = {SeqShape::random, SeqShape::random, SeqShape::same, SeqShape::few,
+                                               SeqShape::asc,    SeqShape::desc,   SeqShape::edge};
+            shape = all[self().uniform(0, std::size(all) - 1)];
+            self().tag(std::string("seq=") + shape_name(shape));
+        }
+        switch (shape) {
+            case SeqShape::same: return std::vector<ll>(std::max(n, 0LL), self().i(r.lo, r.hi));
+            case SeqShape::few: {
+                const ll k = self().uniform(2, 3);
+                std::vector<ll> vals(k);
+                for (auto& v : vals) v = self().i(r.lo, r.hi);
+                return vec(n, [&] { return self().choice(vals); });
+            }
+            case SeqShape::asc: return sorted(n, r.lo, r.hi);
+            case SeqShape::desc: return sorted(n, r.lo, r.hi, {.desc = true});
+            case SeqShape::edge: return vec(n, [&] { return self().coin() ? r.lo : r.hi; });
+            default: return vec(n, r);
+        }
+    }
+
+    // 単調な列。既定は広義増加。strict なら [lo, hi] から相異なる n 個を並べる。
+    std::vector<ll> sorted(ll n, ll lo, ll hi, SortedOpt opt = {}) {
+        auto a = opt.strict ? distinct(n, lo, hi) : vec(n, lo, hi);
+        if (opt.desc) std::sort(a.begin(), a.end(), std::greater<ll>());
+        else std::sort(a.begin(), a.end());
         return a;
     }
 
@@ -80,6 +119,19 @@ class ArrayOps {
         }
         a[k - 1] = rest - prev + min_value;
         return a;
+    }
+
+  private:
+    static const char* shape_name(SeqShape s) {
+        switch (s) {
+            case SeqShape::random: return "random";
+            case SeqShape::same: return "same";
+            case SeqShape::few: return "few";
+            case SeqShape::asc: return "asc";
+            case SeqShape::desc: return "desc";
+            case SeqShape::edge: return "edge";
+            default: return "mixed";
+        }
     }
 };
 

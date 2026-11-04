@@ -27,8 +27,8 @@ STRESS_BIG(max) {                  // 最大ケース。st では使わず、st 
 
 | 関数 | 内容 |
 | --- | --- |
-| `i(l, r)` `uniform(l, r)` `size(l, r)` `real(l, r)` `coin(p)` | 乱数 |
-| `vec(n, l, r)` `vec(n, Range{l, r})` `vec(n, [&]{...})` `sorted` `distinct` `perm` `partition(sum, k)` | 配列 |
+| `i(l, r)` `uniform(l, r)` `size(l, r)` `real(l, r)` `decimal(l, r, d)` `coin(p)` | 乱数 |
+| `vec(n, l, r)` `vec(n, Range{l, r})` `vec(n, [&]{...})` `seq(n, l, r, {.shape})` `sorted(n, l, r, {.strict, .desc})` `distinct` `perm` `partition(sum, k)` | 配列（seq は random / same / few / asc / desc / edge、省略時は混ぜる） |
 | `choice(v)` `shuffle(v)` | 選択 |
 | `tree(n, {.shape, .w})` | 木（random / path / star / caterpillar / binary / deep、省略時は混ぜる） |
 | `parents(n, {.shape, .ordered})` | 根付き木の親の列（既定は P_2 … P_n で P_i < i） |
@@ -79,7 +79,19 @@ cap は `size` にしか効かない。`g.i(1, 8)` で N を決めると、最�
 
 ## 実数と確率
 
-- `g.real(lo, hi)`: 半開区間 `[lo, hi)` の一様な実数（53 bit 精度）。`i` のような端の偏りはない。
+- `g.real(lo, hi)`: 半開区間 `[lo, hi)` の一様な実数（53 bit 精度）。`i` のような端の偏りはない。gen.cpp の中の計算用で、そのまま `out` すると `0.7234912873457213` のような最短表記になる。
+- `g.decimal(lo, hi, d)`: 閉区間 `[lo, hi]` の小数を文字列で返す。入力に小数を出すときはこちら。
+
+```cpp
+g.decimal(0, 100, 2);                    // 小数点以下 2 桁以下: "37" "4.5" "99.25" など
+g.decimal(0, 100, 2, {.exact = true});   // ちょうど 2 桁: "37.00" "4.50" "99.25" など
+g.decimal(-1.5, 1.5, 3);                 // 負の数もいい: "-0.125" "1.5" など
+```
+
+- 既定は「小数点以下 d 桁以下」で、末尾の 0 は付けない（整数なら小数点も付けない）。先に桁数を 0〜d から一様に選んでから値を選ぶので、`37` や `4.5` のような短い形もよく出る。選んだ桁数の値が範囲に無いときは桁数を増やす。
+- `.exact = true` なら小数点以下ちょうど d 桁。
+- 値は `10^-d` 刻みで、`i` と同じく端が出やすい。`lo` `hi` は `10^-d` 刻みに丸める（`0.1` を `0.1000000000000000055…` として扱ったりはしない）。
+- `d` は 0〜18。`|lo|` と `|hi|` に `10^d` を掛けたものは 9e18 未満。範囲に `10^-d` 刻みの値が無いとエラー。
 - `g.coin(p)`: 確率 `p` で `true`。`p` を省略すると 0.5。
 
 ## 選択と並べ替え
@@ -106,16 +118,40 @@ g.tree(n, {.w = [&] { return g.i(1, 5) * 2; }});          // 偶数の重み
 | --- | --- |
 | `g.vec(n, lo, hi)` `g.vec(n, Range{lo, hi})` | 長さ n、各要素を `g.i(lo, hi)` で独立に引く |
 | `g.vec(n, f)` | 長さ n、各要素を `f()` で引く |
-| `g.sorted(n, lo, hi)` | `vec(n, lo, hi)` を昇順にソートしたもの（重複あり） |
+| `g.seq(n, lo, hi)` `g.seq(n, Range{lo, hi})` | 長さ n、形を混ぜた配列（下の表） |
+| `g.sorted(n, lo, hi)` | 広義単調増加（`vec(n, lo, hi)` をソートしたもの） |
+| `g.sorted(n, lo, hi, {.strict = true})` | 狭義単調増加（`distinct(n, lo, hi)` をソートしたもの） |
+| `g.sorted(n, lo, hi, {.desc = true})` | 減少。`.strict` と組み合わせられる |
 | `g.distinct(n, lo, hi)` | `[lo, hi]` から相異なる n 個、順番はランダム |
 | `g.perm(n)` | 順列。1 始まりなら 1..n、`one_indexed = false` なら 0..n-1 |
 | `g.partition(sum, k, min_value = 0)` | 和が `sum` になる k 個の整数（各要素は `min_value` 以上） |
 
 注意点:
 
-- `vec` と `sorted` は `i` を使うので、`lo` や `hi` が重複して出やすい。
+- `vec` と `sorted` は `i` を使うので、`lo` や `hi` が重複して出やすい。`.strict` の `sorted` は `distinct` を使うので端の偏りはなく、範囲の中の値が n 個より少ないとエラー。
 - `distinct` は `uniform` を使うので端の偏りはない。範囲の中の値が n 個より少ないとエラー。
 - `partition` は `sum - min_value * k` を k 個に分ける区切り位置を一様に引いて作る。0 を含みたくないときは `min_value = 1`。`sum < min_value * k` だとエラー。
+
+### seq の形
+
+`vec` は各要素を独立に引くだけなので、全部同じ値やソート済みのような形はほぼ出ない。`seq` は形を選んでから作る。`.shape` を省略すると毎回混ぜ、選んだ形を `seq=形` のタグにする。
+
+```cpp
+auto a = g.seq(n, 1, 1000000000);                          // 形は混ぜる
+auto a = g.seq(n, 1, 100, {.shape = SeqShape::few});
+auto a = g.seq(n, Range{-5, 5}, {.shape = SeqShape::edge});
+```
+
+| 形 | 中身 |
+| --- | --- |
+| `random` | `vec(n, lo, hi)` と同じ（mixed では 2 倍の重み） |
+| `same` | 全部同じ値 |
+| `few` | `i(lo, hi)` で引いた 2〜3 種類の値だけ |
+| `asc` | 広義増加（`sorted(n, lo, hi)`） |
+| `desc` | 広義減少（`sorted(n, lo, hi, {.desc = true})`） |
+| `edge` | `lo` と `hi` だけ |
+
+`vec` の動きは変わらない。座標や重みのように一様でいい部品は `vec`、配列そのものが入力の主役なら `seq` を使うといい。狭義の単調列は `seq` には無いので `sorted` の `.strict` を使う。
 
 ## 木
 
@@ -426,6 +462,7 @@ mixed の形で選ばれたものは自動で付く。形を指定したとき�
 | `graph=形` `digraph=形` | `graph` / `digraph` で mixed が選んだ形 |
 | `graph.base=形` `digraph.base=形` | random の形で土台の木を入れたとき（`graph` の `connected`、`digraph` の `weak` / `root`）、その木の形 |
 | `str=形` | `str` / `strs` で mixed が選んだ形 |
+| `seq=形` | `seq` で mixed が選んだ形 |
 
 自分で付けるときは `g.tag("名前")` を呼ぶ。生成器の中で分岐したときの目印などに使う。
 

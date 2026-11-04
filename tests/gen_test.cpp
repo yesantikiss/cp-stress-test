@@ -289,7 +289,7 @@ int main() {
             seen_max |= x == max100;
             auto y = g.big(3, {.lead_zero = true});
             seen_lead_zero |= y[0] == '0';
-            auto z = g.big_range("ff", "1000", {.digits = digits::hex});
+            auto z = g.big_range("255", "4096", {.digits = digits::hex});
             assert(!val_less(z, "ff", digits::hex) && !val_less("1000", z, digits::hex));
             auto w = g.big_range("0", "1", {.digits = digits::bin});
             assert(w == "0" || w == "1");
@@ -299,6 +299,32 @@ int main() {
             assert(g.big_range("0007", "7") == "7");
         }
         assert(seen_lead_zero && seen_short && seen_max && seen_small);
+        // 範囲の書き方と進数の変換
+        auto conv = [&](unsigned long long v, std::string_view d) {
+            std::string r;
+            do r += d[v % d.size()], v /= d.size();
+            while (v > 0);
+            return std::string(r.rbegin(), r.rend());
+        };
+        for (int rep = 0; rep < 2000; ++rep) {
+            const unsigned long long v = g.uniform(0, LLONG_MAX) >> g.uniform(0, 62);
+            const auto vs = std::to_string(v);
+            for (auto d : {digits::bin, digits::oct, digits::dec, digits::hex, digits::HEX, digits::base36})
+                assert(g.big_range(vs, vs, {.digits = d}) == conv(v, d));
+        }
+        assert(g.big_range("2^60-1", "2^60-1", {.digits = digits::bin}) == std::string(60, '1'));
+        assert(g.big_range("2^60", "2^60") == "1152921504606846976");
+        assert(g.big_range("1e18", "1e18", {.digits = digits::hex}) == "de0b6b3a7640000");
+        assert(g.big_range("1e18-1", "1e18-1") == std::string(18, '9'));
+        assert(g.big_range("3^40", "3^40", {.digits = digits::hex}) == conv(12157665459056928801ULL, digits::hex));
+        assert(g.big_range("1e40", "1e40", {.digits = digits::hex}) == "1d6329f1c35ca4bfabb9f5610000000000");
+        assert(g.big_range("0e5", "0") == "0");
+        {
+            for (int rep = 0; rep < 200; ++rep) {
+                auto x = g.big_range("0", "16^200000-1", {.digits = digits::hex});
+                assert(x.size() <= 200000 && (x.size() == 1 || x[0] != '0'));
+            }
+        }
     }
     // 出力
     {

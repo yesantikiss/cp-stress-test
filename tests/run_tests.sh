@@ -35,6 +35,22 @@ if cmp -s .stress/last/in.txt "$build_dir/expected_in.txt"; then echo "ok   repr
 check last_to_in 0 st last --to-in
 if cmp -s in.txt "$build_dir/expected_in.txt"; then echo "ok   to_in_copied"; else echo "FAIL to_in_copied"; fail=1; fi
 
+# 失敗すると in.txt に自動で書き出す。手書きの in.txt だけ退避し、失敗が続いても残る
+printf 'hand written\n' > in.txt
+st --main main_wa.cpp --seed 11 >/dev/null 2>&1
+cmp -s in.txt .stress/last/in.txt && echo "ok   auto_to_in" || { echo "FAIL auto_to_in"; fail=1; }
+st --main main_wa.cpp --seed 12 >/dev/null 2>&1
+cmp -s in.txt .stress/last/in.txt && [ "$(cat .stress/in.txt.bak)" = "hand written" ] \
+    && echo "ok   auto_to_in_keeps_backup" || { echo "FAIL auto_to_in_keeps_backup"; fail=1; }
+cp .stress/last/in.txt "$build_dir/before_no_to_in.txt"
+st --main main_wa.cpp --seed 13 --no-to-in >/dev/null 2>&1
+cmp -s in.txt "$build_dir/before_no_to_in.txt" && echo "ok   no_to_in" || { echo "FAIL no_to_in"; fail=1; }
+check restore 0 st restore
+[ "$(cat in.txt)" = "hand written" ] && echo "ok   restore_hand_written" || { echo "FAIL restore_hand_written"; fail=1; }
+printf 'edited again\n' > in.txt
+check restore_refuse 2 st restore
+check restore_force  0 st restore --force
+
 # 名前付き生成器、make、bench
 work2="$build_dir/multi"
 rm -rf "$work2" && cp -r "$root/tests/multi" "$work2" && cd "$work2"

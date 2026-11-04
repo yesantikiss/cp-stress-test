@@ -118,6 +118,40 @@ g.tree(n, {.w = [&] { return g.i(1, 5) * 2; }});          // 偶数の重み
 
 `Range{l, r}` は「`g.i(l, r)` を返すラムダ」の省略形で、端の値が出やすいのも同じ。
 
+### ラムダの例
+
+```cpp
+// 小さい値と大きい値を半々
+g.vec(n, [&] { return g.coin() ? g.i(1, 10) : g.i(999999990, 1000000000); });
+
+// 桁数をばらけさせる（1 桁から 18 桁がだいたい同じ割合で出る）
+g.vec(n, [&] {
+    long long p = 1;
+    for (int k = g.i(0, 17); k--;) p *= 10;
+    return g.i(p, p * 10 - 1);
+});
+
+// 状態を持つラムダ。呼ぶたびに 1 から 3 増える増加列
+long long cur = 0;
+g.vec(n, [&] { return cur += g.i(1, 3); });
+
+// 同じラムダを配列と重みで使い回す
+auto val = [&] { return g.coin(0.2) ? 0 : g.i(1, 100); };
+auto a = g.vec(n, val);
+auto es = g.tree(n, {.w = val});
+
+// グリッド。2 割が壁
+auto grid = g.grid(h, w, [&] { return g.coin(0.2) ? '#' : '.'; });
+
+// 関数オブジェクトも渡せる
+struct Pow2 {
+    Gen& g;
+    long long operator()() const { return 1LL << g.i(0, 60); }
+};
+g.vec(n, Pow2{g});
+g.graph(n, m, {.w = Pow2{g}});
+```
+
 ## 配列
 
 | 関数 | 返すもの |

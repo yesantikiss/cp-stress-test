@@ -15,7 +15,8 @@ st --cmp float:1e-6
 st repro SEED:CAP:NAME    # 失敗時に表示されたケースを再現
 st make max -n 5 -o cases/  # 入力ファイルだけ書き出す
 st bench max --tl 2       # 最大ケースで main の実行時間を測る（TLE なら終了コード 1）
-st last --to-in    # 直前の失敗を表示して in.txt にコピー（元の in.txt は .stress/in.txt.bak）
+st last --to-in    # 直前の失敗を表示して in.txt にコピー
+st restore         # 退避した手書きの in.txt を戻す
 st clean           # 保存した失敗を消す
 ```
 
@@ -26,6 +27,7 @@ st clean           # 保存した失敗を消す
 | `st make` | 入力ファイルだけ書き出す |
 | `st bench` | 生成した入力で main の実行時間を測る |
 | `st last` | 直前の失敗を表示する |
+| `st restore` | 退避した手書きの in.txt を戻す |
 | `st clean` | `.stress/` の失敗ケースを消す |
 | `st init` | 雛形を置く |
 
@@ -35,7 +37,7 @@ st clean           # 保存した失敗を消す
 
 1. `st init` で gen.cpp を置き、入力の生成を書く（[gen.cpp の書き方](gen.md)）。
 2. main.cpp と guchoku.cpp を書いて `st`。全部一致すれば `OK  1000 cases  max 3ms` のように出る。
-3. 失敗すると、判定、入力、両方の出力、stderr と、再現用のコマンドを出して止まる。gen がタグを付けていれば `tags:` の行も出る（[タグ](gen.md#タグ)）。
+3. 失敗すると、判定、入力、両方の出力、stderr と、再現用のコマンドを出して止まる。gen がタグを付けていれば `tags:` の行も出る（[タグ](gen.md#タグ)）。失敗した入力は in.txt にも書き出す（[in.txt への書き出し](#intxt-への書き出し)）。
 
 ```text
 WA  token 1: main='5' ref='6'
@@ -43,10 +45,11 @@ case=9473625110285193:3:random  ->  st repro 9473625110285193:3:random
 tags: str=palindrome
 ---- input ----
 ...
-saved: .stress/fail/20261103-151233-WA-random-0021a6c1f0e4b5e9   (st last --to-in で in.txt にコピー)
+saved: .stress/fail/20261103-151233-WA-random-0021a6c1f0e4b5e9
+copied failing input -> in.txt
 ```
 
-4. 直したら `st repro 9473625110285193:3:random` で同じケースを確かめる。手元の実行で追いたいときは `st last --to-in` で in.txt にコピーする。
+4. in.txt に入っているので、そのまま手元で実行して追える。直したら `st repro 9473625110285193:3:random` で同じケースを確かめる。
 
 ## st run
 
@@ -75,6 +78,7 @@ saved: .stress/fail/20261103-151233-WA-random-0021a6c1f0e4b5e9   (st last --to-i
 | `--tl SEC` | main の制限時間（既定 2 秒） |
 | `--ref-tl SEC` | 愚直解の制限時間（既定 10 秒） |
 | `--checker-tl SEC` | checker と interactor の制限時間（既定 10 秒） |
+| `--no-to-in` | 失敗した入力を in.txt にコピーしない（[in.txt への書き出し](#intxt-への書き出し)） |
 | `--gen-tl SEC` | gen の制限時間（既定 10 秒） |
 | `--gen-file SRC` | 生成器のソース（既定 gen.cpp） |
 | `--san` `--cxxflags FLAGS` | [ビルド](#ビルド)の設定 |
@@ -170,7 +174,23 @@ st bench [NAME ...] [-n N] [--seed S] [--cap C] [--tl SEC] [--main SRC]
 
 直前に保存した失敗（`.stress/last`）を、走らせたときと同じ形で表示する。
 
-`--to-in` を付けると、失敗した入力を in.txt にコピーする。in.txt が空でなければ、先に `.stress/in.txt.bak` へ退避する（退避は 1 つだけで、次の `--to-in` で上書きされる）。
+`--to-in` を付けると、失敗した入力を in.txt にコピーする。`st run` や `st repro` を `--no-to-in` 付きで走らせたあとや、in.txt を書き換えたあとに使う。退避のしかたは自動の書き出しと同じ（[in.txt への書き出し](#intxt-への書き出し)）。
+
+## st restore
+
+`.stress/in.txt.bak` を in.txt に戻す。
+
+- 今の in.txt が st の書き出したものでなく（手で書き換えていて）、`.bak` とも違うときは、消さないように止まる。`--force` で上書きする。
+- 戻したあとの in.txt は手書きとして扱うので、次に失敗したときはまた `.bak` に退避する。
+
+## in.txt への書き出し
+
+`st run` と `st repro` は、失敗すると入力を問題のディレクトリの in.txt にコピーする。`--no-to-in` を付けるとコピーしない。
+
+- st は書き出した in.txt の SHA-1 を `.stress/in.txt.sha1` に残す。
+- コピーの前に in.txt があり、空でなく、中身がそれと違う（手で書いた、書き換えた）ときだけ `.stress/in.txt.bak` に退避する。
+- st が書き出したものを上書きするときは退避しないので、失敗が続いても `.bak` には手書きの in.txt が残る。
+- 退避は 1 つだけ。手書きの in.txt を書き換えて、また失敗すると `.bak` はその新しい方になる。
 
 ## st clean
 
@@ -212,7 +232,8 @@ main、愚直解、gen、checker、interactor を並列にビルドする。
 | `run/` | 今走らせているケースの作業場所 |
 | `bench/` | `st bench` で使った入力 |
 | `bin/` | ビルド済みのバイナリと依存ファイル |
-| `in.txt.bak` | `st last --to-in` で退避した in.txt |
+| `in.txt.bak` | 退避した手書きの in.txt（`st restore` で戻す） |
+| `in.txt.sha1` | st が最後に書き出した in.txt の SHA-1 |
 
 失敗のディレクトリには、あるものだけ次のファイルが入る。
 
@@ -226,7 +247,7 @@ main、愚直解、gen、checker、interactor を並列にビルドする。
 | `tags.txt` | gen が付けたタグ（`タグ<TAB>回数` を 1 行ずつ）。タグがあるときだけ |
 | `meta.json` | 判定、理由、seed、cap、生成器、タグ、再現コマンド、モード、比較方法、TL、ソースのパスと SHA-1、日時 |
 
-st は問題のディレクトリの in.txt には触らない（`st last --to-in` のときだけ書く）。
+st が問題のディレクトリの in.txt を書くのは、失敗したとき（`--no-to-in` でなければ）と `st last --to-in`、`st restore` のときだけ。
 
 ## 終了コード
 

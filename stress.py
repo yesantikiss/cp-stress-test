@@ -14,6 +14,7 @@
   st make max -n 5 -o cases/   # 入力ファイルだけ書き出す
   st bench max            # 最大ケースで main の実行時間を測る
   st last [--to-in]       # 直前の失敗を表示（in.txt へコピー）
+  st restore              # 退避した手書きの in.txt を戻す
   st init [-c] [-i]       # gen.cpp などの雛形を置く
   st clean                # 保存した失敗ケースを消す
 
@@ -653,7 +654,35 @@ def show_failure(d: Path, v: Verdict, case_id: str, repro: str, workdir: Path) -
         rel = d.relative_to(workdir)
     except ValueError:
         rel = d
-    Out.log(Out.dim(f"saved: {rel}   (st last --to-in で in.txt にコピー)"))
+    Out.log(Out.dim(f"saved: {rel}"))
+
+
+# ---------------------------------------------------------------- in.txt への書き出し
+
+
+def _sha1(path: Path) -> str:
+    return hashlib.sha1(path.read_bytes()).hexdigest()
+
+
+def copy_to_in(workdir: Path, src: Path) -> None:
+    """失敗した入力を workdir/in.txt にコピーする。
+
+    st が前に書いた in.txt の SHA-1 を .stress/in.txt.sha1 に残しておき、in.txt がそれと違う
+    （手で書いた、書き換えた）ときだけ .stress/in.txt.bak に退避する。st が書いたものどうしの
+    上書きでは退避しないので、失敗が続いても手書きの in.txt は残る。
+    """
+    target = workdir / "in.txt"
+    stress = workdir / ".stress"
+    mark = stress / "in.txt.sha1"
+    if target.exists() and target.stat().st_size:
+        written = mark.read_text().strip() if mark.exists() else None
+        if _sha1(target) != written:
+            backup = stress / "in.txt.bak"
+            shutil.copy2(target, backup)
+            Out.log(Out.dim(f"backed up hand-written in.txt -> {backup.relative_to(workdir)}  (st restore で戻す)"))
+    shutil.copy2(src, target)
+    mark.write_text(_sha1(target) + "\n")
+    Out.log(Out.green("copied") + " failing input -> in.txt")
 
 
 # ---------------------------------------------------------------- 最小化（サイズ縮小）
@@ -834,6 +863,8 @@ def cmd_run(opt: argparse.Namespace) -> int:
         dest = save_failure(workdir, run_dir, case, v, opt, sources)
         meta = json.loads((dest / "meta.json").read_text())
         show_failure(dest, v, case.id, meta["repro"], workdir)
+        if opt.to_in:
+            copy_to_in(workdir, dest / "in.txt")
         Out.log(Out.dim(f"found after {k} cases ({time.monotonic() - start:.1f}s)"))
         return EXIT_FOUND
 
@@ -857,6 +888,8 @@ def cmd_repro(opt: argparse.Namespace) -> int:
     dest = save_failure(workdir, run_dir, case, v, opt, sources)
     meta = json.loads((dest / "meta.json").read_text())
     show_failure(dest, v, case.id, meta["repro"], workdir)
+    if opt.to_in:
+        copy_to_in(workdir, dest / "in.txt")
     return EXIT_FOUND
 
 
@@ -932,13 +965,25 @@ def cmd_last(opt: argparse.Namespace) -> int:
     case_id = meta.get("case", f"{meta['seed']}:{meta['cap']}")
     show_failure(last.resolve(), v, case_id, meta.get("repro", f"st repro {case_id}"), workdir)
     if opt.to_in:
-        target = workdir / "in.txt"
-        if target.exists() and target.stat().st_size:
-            backup = workdir / ".stress" / "in.txt.bak"
-            shutil.copy2(target, backup)
-            Out.log(Out.dim(f"backed up old in.txt -> {backup.relative_to(workdir)}"))
-        shutil.copy2(last / "in.txt", target)
-        Out.log(Out.green("copied") + " failing input -> in.txt")
+        copy_to_in(workdir, last / "in.txt")
+    return EXIT_OK
+
+
+def cmd_restore(opt: argparse.Namespace) -> int:
+    workdir = Path.cwd()
+    target = workdir / "in.txt"
+    backup = workdir / ".stress" / "in.txt.bak"
+    mark = workdir / ".stress" / "in.txt.sha1"
+    if not backup.exists():
+        die("no backup (.stress/in.txt.bak)")
+    if target.exists() and target.stat().st_size and not opt.force:
+        written = mark.read_text().strip() if mark.exists() else None
+        if _sha1(target) != written and _sha1(target) != _sha1(backup):
+            die("in.txt was edited after st wrote it; st restore --force で上書きする")
+    shutil.copy2(backup, target)
+    # 戻したのは手書きのものなので、次の失敗ではまた退避する
+    mark.unlink(missing_ok=True)
+    Out.log(Out.green("restored") + " .stress/in.txt.bak -> in.txt")
     return EXIT_OK
 
 
@@ -991,6 +1036,8 @@ def add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--ref-tl", type=float, default=10.0, help="愚直解の制限時間 [s] (default: 10)")
     p.add_argument("--checker-tl", type=float, default=10.0, help="checker / interactor の制限時間 [s] (default: 10)")
     p.add_argument("--cmp", default=None, help="比較方法: token (default) / exact / float[:EPS]")
+    p.add_argument("--no-to-in", dest="to_in", action="store_false",
+                   help="失敗した入力を in.txt にコピーしない（既定ではコピーする）")
 
 
 def add_cases(p: argparse.ArgumentParser, count: int) -> None:
@@ -1001,7 +1048,7 @@ def add_cases(p: argparse.ArgumentParser, count: int) -> None:
 
 
 def parse(argv: list[str]) -> argparse.Namespace:
-    commands = {"run", "repro", "make", "bench", "last", "clean", "init"}
+    commands = {"run", "repro", "make", "bench", "last", "restore", "clean", "init"}
     if not argv or argv[0] not in commands:
         argv = ["run", *argv]
 
@@ -1040,6 +1087,9 @@ def parse(argv: list[str]) -> argparse.Namespace:
     p = sub.add_parser("last", help="直前の失敗を表示する")
     p.add_argument("--to-in", action="store_true", help="失敗した入力を in.txt にコピーする")
 
+    p = sub.add_parser("restore", help="退避した手書きの in.txt（.stress/in.txt.bak）を戻す")
+    p.add_argument("--force", action="store_true", help="今の in.txt を手で書き換えていても上書きする")
+
     p = sub.add_parser("clean", help=".stress/ の失敗ケースを消す")
     p.add_argument("--all", action="store_true", help="ビルド済みバイナリも消す")
 
@@ -1055,7 +1105,7 @@ def parse(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str]) -> int:
     opt = parse(argv)
     handler = {"run": cmd_run, "repro": cmd_repro, "make": cmd_make, "bench": cmd_bench,
-               "last": cmd_last, "clean": cmd_clean, "init": cmd_init}
+               "last": cmd_last, "restore": cmd_restore, "clean": cmd_clean, "init": cmd_init}
     try:
         return handler[opt.command](opt)
     except KeyboardInterrupt:

@@ -192,9 +192,9 @@ void judge(Judge& j) {
 }
 ```
 
-## 今までの checker を使う
+## judge.hpp を使わない checker
 
-`./checker in out` の形で動き、AC なら終了コード 0 を返す checker は、judge.hpp を使っていなくてもそのまま `-c` に渡せる。`--ref` を付けると 3 番目の引数も渡る。上の[表](#呼ばれ方と終了コード)のとおり、終了コード 3 は checker の失敗、それ以外の 0 でない値は WA として扱う。
+`./checker in out` の形で動き、AC なら終了コード 0 を返す checker なら、judge.hpp を使っていなくてもそのまま `-c` に渡せる。`--ref` を付けると 3 番目の引数も渡る。上の[表](#呼ばれ方と終了コード)のとおり、終了コード 3 は checker の失敗、それ以外の 0 でない値は WA として扱う。
 
 ## main を自分で書く
 

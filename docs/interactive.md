@@ -14,7 +14,7 @@ st last                    # transcript も表示する
 
 ## gen.cpp と愚直解
 
-- gen.cpp は今までどおり書く。出力は interactor が読むので、隠し情報（数当てなら答えの数）も含める。main は in.txt を見ない。
+- gen.cpp は普通の問題と同じように書く。出力は interactor が読むので、隠し情報（数当てなら答えの数）も含める。main は in.txt を見ない。
 - 愚直解とは比べない。正しいかどうかは interactor が隠し情報から判定する。guchoku.cpp はなくてよい。
 - 名前付き生成器、cap を小さい方から増やすこと、失敗後の縮小、`st repro` はそのまま動く。
 - 適応的（adaptive）な interactor も書ける（[下の例](#適応的な-interactor)）。乱数を使うなら seed を入力に含めておくと再現できる。

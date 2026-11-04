@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """競プロ用ランダムテストのドライバ。
 
-カレントディレクトリ（普段は ~/atcoder）の main.cpp / guchoku.cpp / gen.cpp を
+カレントディレクトリの main.cpp / guchoku.cpp / gen.cpp を
 ビルドして、gen の出力で main と guchoku を比べる。-c で checker モード、-i でインタラクティブ。
 
   st                      # 1000 回
@@ -132,11 +132,10 @@ class BuildConfig:
 
     def include_dirs(self) -> list[Path]:
         dirs = [TOOL_ROOT]
-        for acl in (self.workdir / "ac-library", Path.home() / "atcoder" / "ac-library"):
-            if acl.is_dir():
-                dirs.append(acl)
-                break
-        lib = Path(os.environ.get("CP_LIBRARY_DIR", Path.home() / "cp-library"))
+        acl = Path(os.environ["ACL_DIR"]).expanduser() if os.environ.get("ACL_DIR") else self.workdir / "ac-library"
+        if acl.is_dir():
+            dirs.append(acl)
+        lib = Path(os.environ.get("CP_LIBRARY_DIR", Path.home() / "cp-library")).expanduser()
         if lib.is_dir():
             dirs.append(lib)
         return dirs
@@ -147,7 +146,7 @@ class BuildConfig:
         if self.sanitize:
             f += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-g", "-D_GLIBCXX_DEBUG"]
         elif use_pch and self._pch_usable(src):
-            # build.sh と同じ PCH を使う（フラグが合わなければ g++ が黙って無視する）
+            # 問題のディレクトリの PCH を使う（フラグが合わなければ g++ が黙って無視する）
             f += ["-include", "pch_acl.hpp"]
         return f + self.extra
 

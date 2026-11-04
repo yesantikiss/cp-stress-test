@@ -16,7 +16,7 @@
 // 中身はファイルごとに分かれている:
 //   gen/core.hpp    乱数、i / uniform / size / real / coin / choice / shuffle、Range、tag
 //   gen/array.hpp   vec / sorted / distinct / perm / partition
-//   gen/graph.hpp   tree / parents / graph / dag / bipartite
+//   gen/graph.hpp   tree / parents / graph / digraph / dag / bipartite
 //   gen/big.hpp     big / big_range、digits::*
 //   gen/string.hpp  str / mutate / strs / grid
 //   gen/output.hpp  out / out_lines / raw
@@ -45,7 +45,9 @@ class Gen : public Core,
 namespace digits = stress::digits;
 using stress::Edges;
 using stress::Gen;
+using stress::DigraphShape;
 using stress::GraphShape;
+using stress::Reach;
 using stress::Range;
 using stress::StrShape;
 using stress::TreeShape;

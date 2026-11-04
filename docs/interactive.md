@@ -127,6 +127,17 @@ bool r = ad.reply([&](const std::vector<int>& p) { return p[a - 1] < p[b - 1]; }
 | `ad.only()` | 1 つに決まったときのその候補（決まっていなければ interactor の失敗） |
 | `ad.candidates()` | 残りの候補 |
 
+### 例
+
+`examples/adaptive/` に、gen.cpp、interactor.cpp、正しい main.cpp をそろえた例がある。フォルダに入って `st -i interactor.cpp` でそのまま動く。
+
+| 例 | 隠し情報 | 使うもの |
+| --- | --- | --- |
+| [guess](../examples/adaptive/guess) | 1..n の整数（数当て） | `cand::range`、返事は `bool` |
+| [sort](../examples/adaptive/sort) | 1..n の順列（大小比較） | `cand::permutations` |
+| [tree](../examples/adaptive/tree) | n 頂点の木（距離を聞く） | `cand::trees`、返事は `int` |
+| [coins](../examples/adaptive/coins) | 1000 枚中 10 枚の偽コイン（ARC184 A と同じ設定） | `AdaptiveState`（候補を並べられない例） |
+
 ### 候補の作り方
 
 `cand::` の関数で全列挙できる。条件付きの候補は、作ってから `std::erase_if` で絞る。

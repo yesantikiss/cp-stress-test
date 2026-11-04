@@ -5,6 +5,8 @@
 - `stress/gen.hpp`: ジェネレータ用ヘッダ（seed 再現できる乱数、配列、木、グラフ、文字列、出力）
 - `stress/judge.hpp`: スペシャルジャッジ（checker）用ヘッダ
 - `stress/interact.hpp`: インタラクティブ問題の interactor 用ヘッダ
+- `stress/adaptive.hpp`: 適応的（adaptive）な interactor を書くためのヘッダ
+- `examples/adaptive/`: 適応的な interactor の例
 - `stress.py`: ドライバ（ビルド、TL 付き実行、比較、失敗の保存、サイズの縮小）
 
 ## 準備

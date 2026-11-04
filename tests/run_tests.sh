@@ -14,6 +14,8 @@ check() {  # check <name> <expected exit> <command...>
 
 g++ -std=gnu++20 -O2 -Wall -Wextra -Werror -fsanitize=address,undefined -I"$root" \
     "$root/tests/gen_test.cpp" -o "$build_dir/gen_test" && check gen_test 0 "$build_dir/gen_test" || fail=1
+g++ -std=gnu++20 -O2 -Wall -Wextra -Werror -fsanitize=address,undefined -I"$root" \
+    "$root/tests/adaptive_test.cpp" -o "$build_dir/adaptive_test" && check adaptive_test 0 "$build_dir/adaptive_test" || fail=1
 
 work="$build_dir/sample"
 rm -rf "$work" && cp -r "$root/tests/sample" "$work" && cd "$work"
@@ -90,5 +92,13 @@ check inter_with_c  2 st -i interactor.cpp -c checker.cpp --main main_ok.cpp
 check inter_init    0 st init -i --force
 check inter_adaptive_ok    0 st -i interactor_adaptive.cpp --main main_ok.cpp -n 300 --seed 1
 check inter_adaptive_guess 1 st -i interactor_adaptive.cpp --main main_guess.cpp -n 300 --seed 1
+
+# examples/adaptive の例がそのまま通る
+for ex in guess sort tree arc184_a; do
+    work4="$build_dir/example_$ex"
+    rm -rf "$work4" && cp -r "$root/examples/adaptive/$ex" "$work4" && cd "$work4"
+    n=100; [ "$ex" = arc184_a ] && n=10
+    check "example_$ex" 0 st -i interactor.cpp -n "$n" --seed 1
+done
 
 [ "$fail" -eq 0 ] && echo "All tests passed" || { echo "Some tests failed"; exit 1; }

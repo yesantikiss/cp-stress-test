@@ -162,7 +162,13 @@ std::erase_if(cs, [](const auto& a) { return a[0] == a[4]; });  // 両端が違�
 
 ### 候補を並べられないとき
 
-候補が多すぎるときは、状態を自分で持って `AdaptiveState` を使う。返事の候補ごとに状態のコピーへ `apply` し、`score` が一番大きいものを選ぶ（同点は seed で選ぶ）。`apply` が `false` を返した返事は矛盾するので選ばない。
+候補が多すぎるときは、状態を自分で持って `AdaptiveState` を使う。
+
+| 書き方 | 意味 |
+| --- | --- |
+| `AdaptiveState st(初期状態, seed)` | 状態は好きな型でいい |
+| `st.reply({返事...}, apply, score)` | 返事ごとに状態のコピーへ `apply(s, 返事)` し、`score(s)` が一番大きい返事を返す（同点は seed で選ぶ）。`apply` が `false` を返した返事は矛盾するので選ばない |
+| `st.state()` | 今の状態 |
 
 ```cpp
 AdaptiveState st(std::pair<int, int>{1, n}, seed);  // x としてありうる範囲 [lo, hi]

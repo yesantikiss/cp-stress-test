@@ -21,6 +21,46 @@ static bool is_tree(ll n, const Edges& es, ll base) {
     return true;
 }
 
+// 頂点 s から（有向として）到達できる頂点数。
+static ll reach_count(ll n, const Edges& es, ll s) {
+    std::vector<std::vector<ll>> adj(n + 1);
+    for (auto& e : es) adj[e.u].push_back(e.v);
+    std::vector<char> seen(n + 1, 0);
+    std::vector<ll> st{s};
+    seen[s] = 1;
+    ll c = 0;
+    while (!st.empty()) {
+        ll v = st.back();
+        st.pop_back();
+        ++c;
+        for (ll w : adj[v])
+            if (!seen[w]) seen[w] = 1, st.push_back(w);
+    }
+    return c;
+}
+
+// 本数・範囲・単純性・連結性を確かめ、弱連結成分の数を返す。
+static ll check_edges(ll n, ll m, const Edges& es, bool directed, bool simple, bool connected) {
+    assert((ll)es.size() == m);
+    std::set<std::pair<ll, ll>> seen;
+    std::vector<ll> p(n);
+    std::iota(p.begin(), p.end(), 0);
+    std::function<ll(ll)> f = [&](ll x) { return p[x] == x ? x : p[x] = f(p[x]); };
+    for (auto& e : es) {
+        assert(1 <= e.u && e.u <= n && 1 <= e.v && e.v <= n);
+        if (simple) {
+            assert(e.u != e.v);
+            auto key = directed ? std::pair{e.u, e.v} : std::pair{std::min(e.u, e.v), std::max(e.u, e.v)};
+            assert(seen.insert(key).second);
+        }
+        p[f(e.u - 1)] = f(e.v - 1);
+    }
+    ll comps = 0;
+    for (ll v = 0; v < n; ++v) comps += f(v) == v;
+    if (connected) assert(comps == 1);
+    return comps;
+}
+
 int main() {
     // 同じ seed なら同じ出力
     for (std::uint64_t seed = 0; seed < 50; ++seed) {
@@ -96,7 +136,8 @@ int main() {
         ll lo = connected ? n - 1 : 0;
         if (lo > mx) continue;
         ll m = g.i(lo, mx);
-        auto es = g.graph(n, m, {.connected = connected, .directed = directed});
+        auto es = directed ? g.digraph(n, m, {.reach = connected ? Reach::weak : Reach::none})
+                           : g.graph(n, m, {.connected = connected});
         assert((ll)es.size() == m);
         std::set<std::pair<ll, ll>> seen;
         std::vector<ll> p(n);
@@ -118,11 +159,13 @@ int main() {
     // DAG
     for (int k = 0; k < 300; ++k) {
         ll n = g.i(1, 12);
-        bool connected = g.coin(), increasing = g.coin(), simple = g.coin(0.8);
+        bool connected = g.coin(), root = connected && g.coin(), increasing = g.coin(), simple = g.coin(0.8);
         ll mx = n * (n - 1) / 2;
         ll lo = connected ? n - 1 : 0;
         ll m = simple ? g.i(lo, mx) : (n == 1 ? 0 : g.i(lo, mx + 5));
-        auto es = g.dag(n, m, {.connected = connected, .simple = simple, .increasing = increasing});
+        auto es = g.dag(n, m, {.reach = root ? Reach::root : connected ? Reach::weak : Reach::none, .simple = simple,
+                               .increasing = increasing});
+        if (root) assert(reach_count(n, es, 1) == n);
         assert((ll)es.size() == m);
         std::set<std::pair<ll, ll>> seen;
         std::vector<std::vector<ll>> adj(n);
@@ -339,57 +382,80 @@ int main() {
         o.out_lines(std::vector<std::string>{"ab", "cd"});
         assert(o.buffer() == "1 2 x c 3 4 yz\n\n1 2\n1 2 9\nab\ncd\n");
     }
-    // グラフの形: どの形でも本数・単純性・連結性を守る
+    // 無向グラフの形: どの形でも本数・単純性・連結性を守る
     {
         const GraphShape shapes[] = {GraphShape::mixed, GraphShape::random, GraphShape::pieces, GraphShape::hub,
-                                     GraphShape::path, GraphShape::dag, GraphShape::bipartite};
+                                     GraphShape::path, GraphShape::bipartite};
         for (GraphShape sh : shapes)
             for (int k = 0; k < 300; ++k) {
                 ll n = g.i(1, 12);
-                bool directed = sh == GraphShape::dag ? true : sh == GraphShape::bipartite ? false : g.coin();
                 bool connected = sh == GraphShape::pieces ? false : g.coin();
                 bool simple = g.coin(0.8);
-                ll mx = directed ? n * (n - 1) : n * (n - 1) / 2;
-                if (sh == GraphShape::dag) mx = n * (n - 1) / 2;
+                ll mx = n * (n - 1) / 2;
                 if (sh == GraphShape::bipartite) mx = (n / 2) * (n - n / 2);
                 if (sh == GraphShape::pieces) {
                     if (n < 2) continue;
-                    mx = (n - 1) * (n - 2) / 2 * (directed ? 2 : 1);
+                    mx = (n - 1) * (n - 2) / 2;
                 }
+                if (!simple && n >= 2) mx += 5;
                 ll lo = connected ? n - 1 : 0;
-                if (!simple) mx += (n >= 2 ? 5 : 0);
                 if (lo > mx) continue;
                 ll m = g.i(lo, mx);
-                auto es = g.graph(n, m, {.shape = sh, .connected = connected, .simple = simple, .directed = directed});
-                assert((ll)es.size() == m);
-                std::set<std::pair<ll, ll>> seen;
-                std::vector<ll> p(n);
-                std::iota(p.begin(), p.end(), 0);
-                std::function<ll(ll)> f = [&](ll x) { return p[x] == x ? x : p[x] = f(p[x]); };
-                for (auto& e : es) {
-                    assert(1 <= e.u && e.u <= n && 1 <= e.v && e.v <= n);
-                    if (simple) {
-                        assert(e.u != e.v);
-                        auto key = directed ? std::pair{e.u, e.v} : std::pair{std::min(e.u, e.v), std::max(e.u, e.v)};
-                        assert(seen.insert(key).second);
+                auto es = g.graph(n, m, {.shape = sh, .connected = connected, .simple = simple});
+                ll comps = check_edges(n, m, es, false, simple, connected);
+                if (sh == GraphShape::pieces) assert(comps >= 2);
+            }
+    }
+    // 有向グラフの形と到達性
+    {
+        const DigraphShape shapes[] = {DigraphShape::mixed, DigraphShape::random, DigraphShape::pieces,
+                                       DigraphShape::hub, DigraphShape::path, DigraphShape::dag};
+        const Reach reaches[] = {Reach::none, Reach::weak, Reach::root, Reach::strong};
+        for (DigraphShape sh : shapes)
+            for (Reach r : reaches) {
+                if (sh == DigraphShape::pieces && r != Reach::none) continue;
+                if (sh == DigraphShape::dag && r == Reach::strong) continue;
+                for (int k = 0; k < 200; ++k) {
+                    ll n = g.i(1, 12);
+                    bool simple = g.coin(0.8);
+                    ll mx = n * (n - 1);
+                    if (sh == DigraphShape::dag) mx = n * (n - 1) / 2;
+                    if (sh == DigraphShape::pieces) {
+                        if (n < 2) continue;
+                        mx = (n - 1) * (n - 2);
                     }
-                    p[f(e.u - 1)] = f(e.v - 1);
-                }
-                if (connected)
-                    for (ll v = 0; v < n; ++v) assert(f(v) == f(0));
-                if (sh == GraphShape::pieces) {
-                    bool split = false;
-                    for (ll v = 0; v < n; ++v) split |= f(v) != f(0);
-                    assert(split);
+                    if (!simple && n >= 2) mx += 5;
+                    ll lo = r == Reach::none ? 0 : r == Reach::strong && n >= 2 ? n : n - 1;
+                    if (lo > mx) continue;
+                    ll m = g.i(lo, mx);
+                    auto es = g.digraph(n, m, {.shape = sh, .reach = r, .simple = simple});
+                    ll comps = check_edges(n, m, es, true, simple, r != Reach::none);
+                    if (sh == DigraphShape::pieces) assert(comps >= 2);
+                    if (r == Reach::root) assert(reach_count(n, es, 1) == n);
+                    if (r == Reach::strong)
+                        for (ll v = 1; v <= n; ++v) assert(reach_count(n, es, v) == n);
                 }
             }
-        // 大きくても密でも終わる
+        // 0 始まりなら根は頂点 0
+        Gen z(9);
+        z.one_indexed = false;
+        for (int k = 0; k < 50; ++k) {
+            Edges es = z.digraph(8, 10, {.reach = Reach::root});
+            for (auto& e : es) ++e.u, ++e.v;
+            assert(reach_count(8, es, 1) == 8);
+        }
+    }
+    // 大きくても密でも終わる
+    {
         Gen big(7);
         assert((ll)big.graph(200000, 400000, {.shape = GraphShape::path}).size() == 400000);
         assert((ll)big.graph(200000, 400000, {.shape = GraphShape::pieces}).size() == 400000);
         assert((ll)big.graph(200000, 199999, {.shape = GraphShape::hub, .connected = true}).size() == 199999);
         assert((ll)big.graph(300, 300 * 299 / 2, {.shape = GraphShape::path}).size() == 300 * 299 / 2);
         assert((ll)big.graph(300, 299 * 298 / 2, {.shape = GraphShape::pieces}).size() == 299 * 298 / 2);
+        assert((ll)big.digraph(200000, 400000, {.reach = Reach::strong}).size() == 400000);
+        assert((ll)big.digraph(200000, 400000, {.shape = DigraphShape::path, .reach = Reach::root}).size() == 400000);
+        assert((ll)big.digraph(300, 300 * 299, {.reach = Reach::strong}).size() == 300 * 299);
     }
     // タグ: mixed で選ばれた形と、g.tag で付けたもの
     {

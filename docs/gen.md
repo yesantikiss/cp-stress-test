@@ -32,8 +32,9 @@ STRESS_BIG(max) {                  // 最大ケース。st では使わず、st 
 | `choice(v)` `shuffle(v)` | 選択 |
 | `tree(n, {.shape, .w})` | 木（random / path / star / caterpillar / binary / deep、省略時は混ぜる） |
 | `parents(n, {.shape, .ordered})` | 根付き木の親の列（既定は P_2 … P_n で P_i < i） |
-| `graph(n, m, {.shape, .connected, .simple, .directed, .w})` | グラフ（random / dag / bipartite / pieces / hub / path、省略時は混ぜる） |
-| `dag(n, m, {.connected, .simple, .increasing, .w})` | DAG |
+| `graph(n, m, {.shape, .connected, .simple, .w})` | 無向グラフ（random / bipartite / pieces / hub / path、省略時は混ぜる） |
+| `digraph(n, m, {.shape, .reach, .simple, .w})` | 有向グラフ（random / dag / pieces / hub / path、省略時は混ぜる）。`.reach` で弱連結、頂点 1 から到達可能、強連結 |
+| `dag(n, m, {.reach, .simple, .increasing, .w})` | DAG |
 | `bipartite(n1, n2, m, {.connected, .simple, .merged, .w})` `bipartite(n, m, {...})` | 二部グラフ |
 | `str(n, "ab", {.shape})` `str(n, [&]{...})` `mutate(s, k)` `strs(k, total, "ab")` `grid(h, w, ".#")` | 文字列（random / periodic / palindrome / fibonacci / runs） |
 | `big(len, {.digits, .lead_zero})` `big_range("1", "1e100", {.digits})` | 巨大整数（文字列で返す） |
@@ -169,23 +170,23 @@ for (int i = 0; i < n - 1; ++i) g.out(p[i], g.i(1, 100));   // "P_i W_i" を n-1
 ```cpp
 auto es = g.graph(n, m);                                    // 単純な無向グラフ。形は混ぜる
 auto es = g.graph(n, m, {.connected = true, .w = Range{1, 1000000000}});
-auto es = g.graph(n, m, {.simple = false, .directed = true});
+auto es = g.graph(n, m, {.simple = false});                 // 自己ループと多重辺あり
 auto es = g.graph(n, m, {.shape = GraphShape::hub});        // 形を指定
 ```
+
+`graph` は無向グラフ。有向グラフは [有向グラフ](#有向グラフ) の `digraph` を使う。
 
 | オプション | 既定 | 意味 |
 | --- | --- | --- |
 | `.shape` | `GraphShape::mixed` | 辺の張り方（下の表） |
 | `.connected` | `false` | 連結にする。先に全域木を入れてから残りの辺を足す。`m >= n - 1` が必要 |
 | `.simple` | `true` | 自己ループと多重辺を作らない。`false` だとどちらも出る |
-| `.directed` | `false` | 有向グラフ。`connected` と一緒に使うと、全域木の辺の向きはランダムなので強連結にはならない |
 | `.w` | なし | 重み（Range かラムダ） |
 
 | `.shape` | 形 |
 | --- | --- |
 | `GraphShape::random` | 一様ランダムに辺を張る。`connected` なら土台の全域木は [木](#木) の mixed と同じように形を混ぜる（path や deep なら直径の長いグラフになる） |
-| `GraphShape::dag` | `dag(n, m, ...)` と同じ。有向のときだけ使える |
-| `GraphShape::bipartite` | `bipartite(n, m, ...)` と同じ（左右の大きさはランダム）。無向のときだけ使える |
+| `GraphShape::bipartite` | `bipartite(n, m, ...)` と同じ（左右の大きさはランダム） |
 | `GraphShape::pieces` | 頂点を 2 つ以上の組に分け、組の中だけに辺を張る。連結成分が必ず 2 つ以上になり、m が小さければ森になる。`connected` とは一緒に使えず、n >= 2 が必要 |
 | `GraphShape::hub` | 1 から 3 個の頂点を中心に選び、辺の 8 割は中心から張る（次数が偏る）。`connected` なら土台はスター |
 | `GraphShape::path` | 頂点を一列に並べ、番号の差が w 以下の頂点どうしだけに辺を張る（直径が長い）。w は 1 から 3 で、m 本入らないときだけ広げる。`connected` なら土台はパス |
@@ -193,18 +194,66 @@ auto es = g.graph(n, m, {.shape = GraphShape::hub});        // 形を指定
 
 mixed は random を 2 つ、hub と path を 1 つずつ入れた候補に、条件に合えば次を足して、その中から 1 つ選ぶ。
 
-- 有向なら dag、無向なら bipartite（単純グラフで m 本入らないときは足さない）
+- bipartite（単純グラフで m 本入らないときは足さない）
 - `connected` でなく n >= 2 なら pieces（m 本入らないときは足さない）
 
-なので無向で連結でなければ random が 2/6、他が 1/6 ずつになる。木は混ぜない。木も試したいときは、`m = n - 1` で `g.tree(n)` を出す生成器を STRESS_GEN で別に作る。そうすれば失敗したときに、どの生成器だったかで木かどうかも分かる。
+なので連結でなければ random が 2/6、他が 1/6 ずつになる。木は混ぜない。木も試したいときは、`m = n - 1` で `g.tree(n)` を出す生成器を STRESS_GEN で別に作る。そうすれば失敗したときに、どの生成器だったかで木かどうかも分かる。
 
-形を指定したときに条件に合わなければエラーになる（無向で dag、有向で bipartite、`connected` で pieces、m が多すぎるなど）。単純グラフで `m` が辺の最大数（無向 n(n-1)/2、有向 n(n-1)）を超えるとエラー。辺の順番と頂点番号は木と同じくシャッフルされる。
+形を指定したときに条件に合わなければエラーになる（`connected` で pieces、m が多すぎるなど）。単純グラフで `m` が n(n-1)/2 を超えるとエラー。辺の順番と頂点番号は木と同じくシャッフルされ、各辺の `u v` の向きもランダム。
+
+## 有向グラフ
+
+```cpp
+auto es = g.digraph(n, m);                                  // 単純な有向グラフ。形は混ぜる
+auto es = g.digraph(n, m, {.reach = Reach::root});          // 頂点 1 から全頂点に到達できる
+auto es = g.digraph(n, m, {.reach = Reach::strong});        // 強連結
+auto es = g.digraph(n, m, {.shape = DigraphShape::dag, .reach = Reach::root});
+```
+
+各辺 `u v` は u から v への辺。
+
+| オプション | 既定 | 意味 |
+| --- | --- | --- |
+| `.shape` | `DigraphShape::mixed` | 辺の張り方（下の表） |
+| `.reach` | `Reach::none` | 到達性（下の表） |
+| `.simple` | `true` | 自己ループと多重辺を作らない（u→v と v→u は別の辺なので両方出ることがある） |
+| `.w` | なし | 重み（Range かラムダ） |
+
+| `.reach` | 保証すること | 作り方 | 必要な m |
+| --- | --- | --- | --- |
+| `Reach::none` | なし | | |
+| `Reach::weak` | 弱連結（向きを無視すれば連結） | 全域木を入れ、各辺の向きをランダムにする | `m >= n - 1` |
+| `Reach::root` | 頂点 1 から全頂点に到達できる | 全域木を入れ、根を頂点 1 にして辺を全部根から外向きにする | `m >= n - 1` |
+| `Reach::strong` | 強連結（どの頂点からどの頂点へも到達できる） | 耳分解で作る（下の説明） | n >= 2 なら `m >= n` |
+
+どれも、土台を入れたあとの残りの辺は形に従って足す。`Reach::root` の根は `g.one_indexed = false` なら頂点 0 になる。根以外の番号はシャッフルされる。
+
+`Reach::strong` の土台は、頂点 1 個から始めて「今ある頂点 → 新しい頂点の列 → 今ある頂点」の経路（耳）を何本か足して作る。耳の本数は 1 から min(n-1, m-(n-1)) の中からランダムに選ぶので、1 本なら大きな閉路 1 つ、多ければ小さな閉路がいくつもつながった形になる。土台の辺は (n-1) + 耳の本数 本。
+
+| `.shape` | 形 |
+| --- | --- |
+| `DigraphShape::random` | 一様ランダムに辺を張る。`weak` と `root` では土台の全域木の形を [木](#木) の mixed と同じように混ぜる |
+| `DigraphShape::dag` | `dag(n, m, ...)` と同じ。`Reach::strong` とは一緒に使えない |
+| `DigraphShape::pieces` | 頂点を 2 つ以上の組に分け、組の中だけに辺を張る。`.reach` は `none` だけで、n >= 2 が必要 |
+| `DigraphShape::hub` | 1 から 3 個の頂点を中心に選び、辺の 8 割は中心とのあいだに張る（向きはランダム）。`weak` と `root` では土台はスター |
+| `DigraphShape::path` | 頂点を一列に並べ、番号の差が w 以下の頂点どうしだけに辺を張る（向きはランダム）。`weak` と `root` では土台はパス（`root` なら根は半々で端） |
+| `DigraphShape::mixed`（省略時） | 上のどれかを選ぶ（下の説明） |
+
+`Reach::strong` の土台は形によらず耳分解なので、hub と path は残りの辺だけがその形になる。
+
+mixed は random を 2 つ、hub と path を 1 つずつ入れた候補に、条件に合えば次を足して、その中から 1 つ選ぶ。
+
+- `Reach::strong` でなければ dag（単純グラフで m 本入らないときは足さない）
+- `Reach::none` で n >= 2 なら pieces（m 本入らないときは足さない）
+
+形を指定したときに条件に合わなければエラーになる。単純グラフで `m` が n(n-1) を超えるとエラー。
 
 ## DAG
 
 ```cpp
 auto es = g.dag(n, m);                                      // 単純な DAG
-auto es = g.dag(n, m, {.connected = true});                 // 弱連結
+auto es = g.dag(n, m, {.reach = Reach::weak});              // 弱連結
+auto es = g.dag(n, m, {.reach = Reach::root});              // 頂点 1 から全頂点に到達できる
 auto es = g.dag(n, m, {.increasing = true});                // 常に u < v
 ```
 
@@ -212,7 +261,7 @@ auto es = g.dag(n, m, {.increasing = true});                // 常に u < v
 
 | オプション | 既定 | 意味 |
 | --- | --- | --- |
-| `.connected` | `false` | 弱連結にする（向きを無視して連結）。`m >= n - 1` が必要 |
+| `.reach` | `Reach::none` | `Reach::weak` なら弱連結。`Reach::root` なら頂点 1 をトポ順の先頭にして、各頂点に前の頂点からの辺を 1 本ずつ入れる（頂点 1 から全頂点に到達できる）。どちらも `m >= n - 1` が必要。DAG は強連結にならないので `Reach::strong` はエラー |
 | `.simple` | `true` | 多重辺を作らない。自己ループはどちらでも出ない |
 | `.increasing` | `false` | 頂点番号をトポ順のままにして、常に `u < v` にする。「A_i < B_i」の制約がある問題向け |
 | `.w` | なし | 重み（Range かラムダ） |
@@ -250,7 +299,7 @@ for (auto e : g.tree(n)) g.out(e.u, e.v, g.choice("abc"));  // "u v c" を n-1 �
 
 ## 頂点番号
 
-`g.one_indexed` が `true`（既定）なら `tree` / `parents` / `graph` / `dag` / `bipartite` / `perm` は 1 始まり、`false` なら 0 始まりになる。生成器の最初で `g.one_indexed = false;` と書けばその生成器の中で全部 0 始まりになる。
+`g.one_indexed` が `true`（既定）なら `tree` / `parents` / `graph` / `digraph` / `dag` / `bipartite` / `perm` は 1 始まり、`false` なら 0 始まりになる。生成器の最初で `g.one_indexed = false;` と書けばその生成器の中で全部 0 始まりになる。
 
 ## 文字列
 
@@ -374,8 +423,8 @@ mixed の形で選ばれたものは自動で付く。形を指定したとき�
 | --- | --- |
 | `tree=形` | `tree(n)` で mixed が選んだ形 |
 | `parents=形` | `parents(n)` で mixed が選んだ形 |
-| `graph=形` | `graph(n, m)` で mixed が選んだ形 |
-| `graph.base=形` | `graph(n, m, {.connected = true})` で random になったとき、土台の木の形 |
+| `graph=形` `digraph=形` | `graph` / `digraph` で mixed が選んだ形 |
+| `graph.base=形` `digraph.base=形` | random の形で土台の木を入れたとき（`graph` の `connected`、`digraph` の `weak` / `root`）、その木の形 |
 | `str=形` | `str` / `strs` で mixed が選んだ形 |
 
 自分で付けるときは `g.tag("名前")` を呼ぶ。生成器の中で分岐したときの目印などに使う。

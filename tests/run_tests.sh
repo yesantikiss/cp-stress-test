@@ -14,6 +14,8 @@ check() {  # check <name> <expected exit> <command...>
 
 g++ -std=gnu++20 -O2 -Wall -Wextra -Werror -fsanitize=address,undefined -I"$root" \
     "$root/tests/gen_test.cpp" -o "$build_dir/gen_test" && check gen_test 0 "$build_dir/gen_test" || fail=1
+g++ -std=gnu++20 -O2 -Wall -Wextra -Werror -fsanitize=address,undefined -I"$root" \
+    "$root/tests/adaptive_test.cpp" -o "$build_dir/adaptive_test" && check adaptive_test 0 "$build_dir/adaptive_test" || fail=1
 
 work="$build_dir/sample"
 rm -rf "$work" && cp -r "$root/tests/sample" "$work" && cd "$work"

@@ -131,9 +131,9 @@ g.vec(n, [&] {
     return g.i(p, p * 10 - 1);
 });
 
-// 状態を持つラムダ。呼ぶたびに 1 から 3 増える増加列
-long long cur = 0;
-g.vec(n, [&] { return cur += g.i(1, 3); });
+// 状態を持つラムダ。隣との差が -1, 0, 1 のどれかになる列（[1, 100] に収める）
+long long cur = g.i(1, 100);
+g.vec(n, [&] { return cur = std::clamp(cur + g.i(-1, 1), 1LL, 100LL); });
 
 // 同じラムダを配列と重みで使い回す
 auto val = [&] { return g.coin(0.2) ? 0 : g.i(1, 100); };

@@ -210,14 +210,15 @@ class RunResult:
 
 
 def run(exe: Path | list[str], stdin: Path | None, stdout: Path, stderr: Path, tl: float,
-        cwd: Path, args: list[str] | None = None) -> RunResult:
+        cwd: Path, args: list[str] | None = None, env: dict[str, str] | None = None) -> RunResult:
     cmd = [str(exe)] if isinstance(exe, Path) else list(exe)
     cmd += args or []
     start = time.perf_counter()
     with open(stdout, "wb") as fo, open(stderr, "wb") as fe:
         fi = open(stdin, "rb") if stdin else subprocess.DEVNULL
         try:
-            proc = subprocess.Popen(cmd, stdin=fi, stdout=fo, stderr=fe, cwd=cwd, start_new_session=True)
+            proc = subprocess.Popen(cmd, stdin=fi, stdout=fo, stderr=fe, cwd=cwd, start_new_session=True,
+                                    env={**os.environ, **env} if env else None)
             try:
                 code = proc.wait(timeout=tl)
             except subprocess.TimeoutExpired:
@@ -321,11 +322,26 @@ class Case:
 
 def generate(progs: Programs, case: Case, d: Path, opt: argparse.Namespace) -> Verdict | None:
     """d/in.txt に入力を作る。失敗したら Verdict を返す。"""
-    g = run(progs.gen, None, d / "in.txt", d / "stderr_gen.txt", opt.gen_tl, d, case.gen_args())
+    g = run(progs.gen, None, d / "in.txt", d / "stderr_gen.txt", opt.gen_tl, d, case.gen_args(),
+            env={"STRESS_TAGS": str(d / "tags.txt")})
     if g.status != "OK":
         msg = (d / "stderr_gen.txt").read_text(errors="replace").strip()
         return Verdict("GEN_FAIL", f"[{case.name}] {g.status} ({describe_code(g.code)}) {msg}")
     return None
+
+
+def read_tags(d: Path) -> list[str]:
+    """gen が書いた tags.txt（"タグ<TAB>回数"）を "str=palindrome x3" のような文字列の列にする。"""
+    p = d / "tags.txt"
+    if not p.exists():
+        return []
+    tags = []
+    for line in p.read_text(errors="replace").splitlines():
+        name, _, count = line.rpartition("\t")
+        if not name:
+            continue
+        tags.append(name if count == "1" else f"{name} x{count}")
+    return tags
 
 
 def fresh_dir(d: Path) -> Path:
@@ -563,6 +579,7 @@ def save_failure(workdir: Path, run_dir: Path, case: Case, v: Verdict, opt: argp
         "seed": case.seed,
         "cap": case.cap,
         "gen": case.name,
+        "tags": read_tags(dest),
         "case": case.id,
         "repro": f"st repro {case.id}" + judge_flags(opt),
         "mode": mode_name(opt),
@@ -614,6 +631,8 @@ def show_failure(d: Path, v: Verdict, case_id: str, repro: str, workdir: Path) -
     Out.log()
     Out.log(Out.red(f"{v.kind}") + f"  {v.detail}")
     Out.log(Out.dim(f"case={case_id}  ->  {repro}"))
+    if tags := read_tags(d):
+        Out.log("tags: " + ", ".join(tags))
     Out.log(Out.yellow("---- input ----"))
     Out.log(head(d / "in.txt"))
     if (d / "transcript.txt").exists():

@@ -339,5 +339,72 @@ int main() {
         o.out_lines(std::vector<std::string>{"ab", "cd"});
         assert(o.buffer() == "1 2 x c 3 4 yz\n\n1 2\n1 2 9\nab\ncd\n");
     }
+    // グラフの形: どの形でも本数・単純性・連結性を守る
+    {
+        const GraphShape shapes[] = {GraphShape::mixed, GraphShape::random, GraphShape::pieces, GraphShape::hub,
+                                     GraphShape::path, GraphShape::dag, GraphShape::bipartite};
+        for (GraphShape sh : shapes)
+            for (int k = 0; k < 300; ++k) {
+                ll n = g.i(1, 12);
+                bool directed = sh == GraphShape::dag ? true : sh == GraphShape::bipartite ? false : g.coin();
+                bool connected = sh == GraphShape::pieces ? false : g.coin();
+                bool simple = g.coin(0.8);
+                ll mx = directed ? n * (n - 1) : n * (n - 1) / 2;
+                if (sh == GraphShape::dag) mx = n * (n - 1) / 2;
+                if (sh == GraphShape::bipartite) mx = (n / 2) * (n - n / 2);
+                if (sh == GraphShape::pieces) {
+                    if (n < 2) continue;
+                    mx = (n - 1) * (n - 2) / 2 * (directed ? 2 : 1);
+                }
+                ll lo = connected ? n - 1 : 0;
+                if (!simple) mx += (n >= 2 ? 5 : 0);
+                if (lo > mx) continue;
+                ll m = g.i(lo, mx);
+                auto es = g.graph(n, m, {.shape = sh, .connected = connected, .simple = simple, .directed = directed});
+                assert((ll)es.size() == m);
+                std::set<std::pair<ll, ll>> seen;
+                std::vector<ll> p(n);
+                std::iota(p.begin(), p.end(), 0);
+                std::function<ll(ll)> f = [&](ll x) { return p[x] == x ? x : p[x] = f(p[x]); };
+                for (auto& e : es) {
+                    assert(1 <= e.u && e.u <= n && 1 <= e.v && e.v <= n);
+                    if (simple) {
+                        assert(e.u != e.v);
+                        auto key = directed ? std::pair{e.u, e.v} : std::pair{std::min(e.u, e.v), std::max(e.u, e.v)};
+                        assert(seen.insert(key).second);
+                    }
+                    p[f(e.u - 1)] = f(e.v - 1);
+                }
+                if (connected)
+                    for (ll v = 0; v < n; ++v) assert(f(v) == f(0));
+                if (sh == GraphShape::pieces) {
+                    bool split = false;
+                    for (ll v = 0; v < n; ++v) split |= f(v) != f(0);
+                    assert(split);
+                }
+            }
+        // 大きくても密でも終わる
+        Gen big(7);
+        assert((ll)big.graph(200000, 400000, {.shape = GraphShape::path}).size() == 400000);
+        assert((ll)big.graph(200000, 400000, {.shape = GraphShape::pieces}).size() == 400000);
+        assert((ll)big.graph(200000, 199999, {.shape = GraphShape::hub, .connected = true}).size() == 199999);
+        assert((ll)big.graph(300, 300 * 299 / 2, {.shape = GraphShape::path}).size() == 300 * 299 / 2);
+        assert((ll)big.graph(300, 299 * 298 / 2, {.shape = GraphShape::pieces}).size() == 299 * 298 / 2);
+    }
+    // タグ: mixed で選ばれた形と、g.tag で付けたもの
+    {
+        Gen t(3);
+        t.str(10, "ab");
+        t.str(10, "ab", {.shape = StrShape::runs});  // 形を指定したらタグは付かない
+        t.tag("heavy");
+        t.tag("heavy");
+        auto& tags = t.tags();
+        assert(tags.size() == 2);
+        assert(tags[0].first.rfind("str=", 0) == 0 && tags[0].second == 1);
+        assert(tags[1].first == "heavy" && tags[1].second == 2);
+        Gen u(4);
+        u.graph(10, 12);
+        assert(u.tags().size() >= 1 && u.tags()[0].first.rfind("graph=", 0) == 0);
+    }
     std::puts("gen_test: all passed");
 }

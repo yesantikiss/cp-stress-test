@@ -35,11 +35,12 @@ st clean           # 保存した失敗を消す
 
 1. `st init` で gen.cpp を置き、入力の生成を書く（[gen.cpp の書き方](gen.md)）。
 2. main.cpp と guchoku.cpp を書いて `st`。全部一致すれば `OK  1000 cases  max 3ms` のように出る。
-3. 失敗すると、判定、入力、両方の出力、stderr と、再現用のコマンドを出して止まる。
+3. 失敗すると、判定、入力、両方の出力、stderr と、再現用のコマンドを出して止まる。gen がタグを付けていれば `tags:` の行も出る（[タグ](gen.md#タグ)）。
 
 ```text
 WA  token 1: main='5' ref='6'
 case=9473625110285193:3:random  ->  st repro 9473625110285193:3:random
+tags: str=palindrome
 ---- input ----
 ...
 saved: .stress/fail/20261103-151233-WA-random-0021a6c1f0e4b5e9   (st last --to-in で in.txt にコピー)
@@ -221,7 +222,8 @@ main、愚直解、gen、checker、interactor を並列にビルドする。
 | `stderr_main.txt` `stderr_ref.txt` `stderr_gen.txt` | それぞれの stderr |
 | `stderr_checker.txt` `stdout_checker.txt` | checker の出力 |
 | `transcript.txt` `stderr_interactor.txt` | インタラクティブのやり取りと interactor の stderr |
-| `meta.json` | 判定、理由、seed、cap、生成器、再現コマンド、モード、比較方法、TL、ソースのパスと SHA-1、日時 |
+| `tags.txt` | gen が付けたタグ（`タグ<TAB>回数` を 1 行ずつ）。タグがあるときだけ |
+| `meta.json` | 判定、理由、seed、cap、生成器、タグ、再現コマンド、モード、比較方法、TL、ソースのパスと SHA-1、日時 |
 
 st は問題のディレクトリの in.txt には触らない（`st last --to-in` のときだけ書く）。
 

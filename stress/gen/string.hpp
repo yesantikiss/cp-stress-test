@@ -26,6 +26,7 @@ class StringOps {
             static constexpr StrShape all[] = {StrShape::random, StrShape::random, StrShape::periodic,
                                                StrShape::palindrome, StrShape::fibonacci, StrShape::runs};
             shape = all[self().uniform(0, std::size(all) - 1)];
+            self().tag(std::string("str=") + shape_name(shape));
         }
         switch (shape) {
             case StrShape::periodic: return periodic_str(n, alphabet);
@@ -81,6 +82,16 @@ class StringOps {
     }
 
   private:
+    static const char* shape_name(StrShape s) {
+        switch (s) {
+            case StrShape::random: return "random";
+            case StrShape::periodic: return "periodic";
+            case StrShape::palindrome: return "palindrome";
+            case StrShape::fibonacci: return "fibonacci";
+            case StrShape::runs: return "runs";
+            default: return "mixed";
+        }
+    }
     std::string random_str(ll n, std::string_view a) {
         std::string s(n, ' ');
         for (auto& c : s) c = self().choice(a);

@@ -7,6 +7,7 @@
 namespace stress {
 
 enum class TreeShape { mixed, random, path, star, caterpillar, binary, deep };
+enum class GraphShape { mixed, random, dag, bipartite, pieces, hub, path };
 
 struct Edge {
     ll u, v, w;
@@ -27,6 +28,7 @@ struct ParentOpt {
 };
 
 struct GraphOpt {
+    GraphShape shape = GraphShape::mixed;
     bool connected = false;
     bool simple = true;     // 自己ループと多重辺なし
     bool directed = false;
@@ -55,7 +57,7 @@ class GraphOps {
 
     Edges tree(ll n, TreeOpt opt = {}) {
         if (n <= 0) gen_error("tree: n must be positive");
-        auto raw = raw_tree(n, opt.shape);
+        auto raw = raw_tree(n, opt.shape, "tree");
         return finish_edges(n, raw, opt.w, /*shuffle_labels=*/true, /*directed=*/false);
     }
 
@@ -64,7 +66,7 @@ class GraphOps {
     //   ordered = false: 番号はシャッフル、根もランダム。n 個を返し、根の親は base() - 1（0 か -1）。
     std::vector<ll> parents(ll n, ParentOpt opt = {}) {
         if (n <= 0) gen_error("parents: n must be positive");
-        auto raw = raw_tree(n, opt.shape);
+        auto raw = raw_tree(n, opt.shape, "parents");
         std::vector<std::vector<ll>> adj(n);
         for (auto [u, v] : raw) adj[u].push_back(v), adj[v].push_back(u);
         // path や deep は頂点 0 を根にすると深くなるので、半々で 0 を根にする。
@@ -116,37 +118,28 @@ class GraphOps {
         if (opt.connected && m < n - 1)
             gen_error("graph: connected graph needs m >= n-1");
 
-        std::vector<std::pair<ll, ll>> raw;
-        raw.reserve(m);
-        std::set<std::pair<ll, ll>> used;
-        auto key = [&](ll u, ll v) { return opt.directed ? std::pair{u, v} : std::pair{std::min(u, v), std::max(u, v)}; };
-        auto add = [&](ll u, ll v) {
-            if (opt.simple) {
-                if (u == v || !used.insert(key(u, v)).second) return false;
-            }
-            raw.push_back({u, v});
-            return true;
-        };
-        if (opt.connected) {
-            Edges t = tree(n, {.shape = TreeShape::random});
-            for (auto& e : t) {
-                ll u = e.u - self().base(), v = e.v - self().base();
-                if (opt.directed && self().coin()) std::swap(u, v);
-                add(u, v);
-            }
+        GraphShape shape = opt.shape;
+        if (shape == GraphShape::mixed) {
+            // random を 2 つ入れて、素のランダムが少し多めに出るようにする
+            std::vector<GraphShape> cand{GraphShape::random, GraphShape::random, GraphShape::hub, GraphShape::path};
+            if (opt.directed ? dag_fits(n, m, opt.simple) : bipartite_fits(n, m, opt.simple))
+                cand.push_back(opt.directed ? GraphShape::dag : GraphShape::bipartite);
+            if (pieces_fits(n, m, opt)) cand.push_back(GraphShape::pieces);
+            shape = self().choice(cand);
+            self().tag(std::string("graph=") + shape_name(shape));
         }
-        if (opt.simple && m - static_cast<ll>(raw.size()) > (max_edges - static_cast<ll>(raw.size())) / 2) {
-            // 密なとき: 候補を全列挙して選ぶ
-            std::vector<std::pair<ll, ll>> cand;
-            for (ll u = 0; u < n; ++u)
-                for (ll v = opt.directed ? 0 : u + 1; v < n; ++v)
-                    if (u != v && !used.count(key(u, v))) cand.push_back({u, v});
-            self().shuffle(cand);
-            for (ll k = 0; static_cast<ll>(raw.size()) < m; ++k) add(cand[k].first, cand[k].second);
-        } else {
-            while (static_cast<ll>(raw.size()) < m) add(self().uniform(0, n - 1), self().uniform(0, n - 1));
+        switch (shape) {
+            case GraphShape::dag:
+                if (!opt.directed) gen_error("graph: shape dag needs .directed = true");
+                return dag(n, m, {.connected = opt.connected, .simple = opt.simple, .w = opt.w});
+            case GraphShape::bipartite:
+                if (opt.directed) gen_error("graph: shape bipartite needs .directed = false");
+                return bipartite(n, m, {.connected = opt.connected, .simple = opt.simple, .w = opt.w});
+            case GraphShape::pieces: return pieces_graph(n, m, opt);
+            case GraphShape::hub: return hub_graph(n, m, opt);
+            case GraphShape::path: return path_graph(n, m, opt);
+            default: return random_graph(n, m, opt);
         }
-        return finish_edges(n, raw, opt.w, /*shuffle_labels=*/true, opt.directed);
     }
 
     // ランダムなトポ順の上で、前から後ろへの辺だけを張る。
@@ -253,14 +246,195 @@ class GraphOps {
     }
 
   private:
-    // 形 shape_in の木の辺（0 始まり、作った順）。
-    std::vector<std::pair<ll, ll>> raw_tree(ll n, TreeShape shape_in) {
+    using RawEdges = std::vector<std::pair<ll, ll>>;
+
+    static const char* shape_name(TreeShape s) {
+        switch (s) {
+            case TreeShape::random: return "random";
+            case TreeShape::path: return "path";
+            case TreeShape::star: return "star";
+            case TreeShape::caterpillar: return "caterpillar";
+            case TreeShape::binary: return "binary";
+            case TreeShape::deep: return "deep";
+            default: return "mixed";
+        }
+    }
+    static const char* shape_name(GraphShape s) {
+        switch (s) {
+            case GraphShape::random: return "random";
+            case GraphShape::dag: return "dag";
+            case GraphShape::bipartite: return "bipartite";
+            case GraphShape::pieces: return "pieces";
+            case GraphShape::hub: return "hub";
+            case GraphShape::path: return "path";
+            default: return "mixed";
+        }
+    }
+
+    static bool dag_fits(ll n, ll m, bool simple) {
+        if (m == 0) return true;
+        return n >= 2 && (!simple || m <= n * (n - 1) / 2);
+    }
+    static bool bipartite_fits(ll n, ll m, bool simple) {
+        if (m == 0) return true;
+        return n >= 2 && (!simple || m <= (n / 2) * (n - n / 2));
+    }
+    // 2 つ以上の組に分けて m 本入るか（一番入るのは 1 頂点と n-1 頂点に分けたとき）。
+    static bool pieces_fits(ll n, ll m, const GraphOpt& opt) {
+        if (opt.connected || n < 2) return false;
+        const ll big = (n - 1) * (n - 2) / 2 * (opt.directed ? 2 : 1);
+        return !opt.simple || m <= big;
+    }
+
+    // 素のランダム。connected なら形を混ぜた木を土台にする。
+    Edges random_graph(ll n, ll m, const GraphOpt& opt) {
+        RawEdges raw;
+        raw.reserve(m);
+        if (opt.connected) {
+            raw = raw_tree(n, TreeShape::mixed, "graph.base");
+            if (opt.directed)
+                for (auto& [u, v] : raw)
+                    if (self().coin()) std::swap(u, v);
+        }
+        grow(raw, m, opt, [&] { return std::pair{self().uniform(0, n - 1), self().uniform(0, n - 1)}; },
+             [&](auto&& emit) {
+                 for (ll u = 0; u < n; ++u)
+                     for (ll v = 0; v < n; ++v) emit(u, v);
+             });
+        return finish_edges(n, raw, opt.w, /*shuffle_labels=*/true, opt.directed);
+    }
+
+    // 頂点を 2 つ以上の組に分け、組の中だけに辺を張る。連結成分が複数になる。
+    Edges pieces_graph(ll n, ll m, const GraphOpt& opt) {
+        if (opt.connected) gen_error("graph: shape pieces can't be used with .connected = true");
+        if (n < 2) gen_error("graph: shape pieces needs n >= 2");
+        if (!pieces_fits(n, m, opt))
+            gen_error("graph: m=" + std::to_string(m) + " is too many for shape pieces with n=" + std::to_string(n));
+        auto capacity = [&](const std::vector<ll>& sizes) {
+            ll c = 0;
+            for (ll s : sizes) c += s * (s - 1) / 2 * (opt.directed ? 2 : 1);
+            return c;
+        };
+        std::vector<ll> sizes;
+        for (int t = 0; t < 20 && (sizes.empty() || (opt.simple && capacity(sizes) < m)); ++t) {
+            const ll k = self().coin() ? self().uniform(2, std::min<ll>(n, 4)) : self().uniform(2, n);
+            sizes = self().partition(n, k, 1);
+        }
+        if (opt.simple && capacity(sizes) < m) sizes = {n - 1, 1};
+        std::vector<ll> lo(n), hi(n);  // 頂点 v の組は [lo[v], hi[v]]
+        for (ll start = 0; ll s : sizes) {
+            for (ll v = start; v < start + s; ++v) lo[v] = start, hi[v] = start + s - 1;
+            start += s;
+        }
+        RawEdges raw;
+        raw.reserve(m);
+        grow(raw, m, opt,
+             [&] {
+                 const ll u = self().uniform(0, n - 1);
+                 return std::pair{u, self().uniform(lo[u], hi[u])};
+             },
+             [&](auto&& emit) {
+                 for (ll u = 0; u < n; ++u)
+                     for (ll v = lo[u]; v <= hi[u]; ++v) emit(u, v);
+             });
+        return finish_edges(n, raw, opt.w, /*shuffle_labels=*/true, opt.directed);
+    }
+
+    // 辺の多くが 1 から 3 個の頂点につながる（次数が偏る）。connected ならスターが土台。
+    Edges hub_graph(ll n, ll m, const GraphOpt& opt) {
+        const ll h = self().uniform(1, std::min<ll>(n, 3));  // 頂点 0 .. h-1 が中心
+        RawEdges raw;
+        raw.reserve(m);
+        if (opt.connected) raw = raw_tree(n, TreeShape::star, nullptr);
+        auto orient = [&](std::pair<ll, ll> e) {
+            if (opt.directed && self().coin()) std::swap(e.first, e.second);
+            return e;
+        };
+        for (auto& e : raw) e = orient(e);
+        grow(raw, m, opt,
+             [&] {
+                 if (self().coin(0.8)) return orient({self().uniform(0, h - 1), self().uniform(0, n - 1)});
+                 return std::pair{self().uniform(0, n - 1), self().uniform(0, n - 1)};
+             },
+             [&](auto&& emit) {
+                 for (ll u = 0; u < n; ++u)
+                     for (ll v = 0; v < n; ++v) emit(u, v);
+             });
+        return finish_edges(n, raw, opt.w, /*shuffle_labels=*/true, opt.directed);
+    }
+
+    // 頂点を一列に並べ、番号の差が w 以下の頂点どうしだけに辺を張る（直径が長い）。
+    // connected ならパスが土台。w は 1 から 3 で、m 本入らないときだけ広げる。
+    Edges path_graph(ll n, ll m, const GraphOpt& opt) {
+        auto capacity = [&](ll w) { return (w * n - w * (w + 1) / 2) * (opt.directed ? 2 : 1); };
+        ll w = std::min<ll>(self().uniform(1, 3), std::max<ll>(n - 1, 1));
+        if (opt.simple)
+            while (w < n - 1 && capacity(w) < m) ++w;
+        RawEdges raw;
+        raw.reserve(m);
+        if (opt.connected) raw = raw_tree(n, TreeShape::path, nullptr);
+        auto orient = [&](std::pair<ll, ll> e) {
+            if (opt.directed && self().coin()) std::swap(e.first, e.second);
+            return e;
+        };
+        for (auto& e : raw) e = orient(e);
+        grow(raw, m, opt,
+             [&] {
+                 if (n == 1) return std::pair<ll, ll>{0, 0};
+                 const ll u = self().uniform(0, n - 2);
+                 return orient({u, u + self().uniform(1, std::min(w, n - 1 - u))});
+             },
+             [&](auto&& emit) {
+                 for (ll u = 0; u < n; ++u)
+                     for (ll v = std::max<ll>(0, u - w); v <= std::min(n - 1, u + w); ++v) emit(u, v);
+             });
+        return finish_edges(n, raw, opt.w, /*shuffle_labels=*/true, opt.directed);
+    }
+
+    // graph 用: raw に draw() の辺を足して m 本にする。simple なら自己ループと多重辺を除く。
+    // 続けて 64 回外れたら密とみなし、each(emit) で列挙した候補の残りから選ぶ。
+    template <class Draw, class Each>
+    void grow(RawEdges& raw, ll m, const GraphOpt& opt, Draw draw, Each each) {
+        if (!opt.simple) {
+            while (static_cast<ll>(raw.size()) < m) raw.push_back(draw());
+            return;
+        }
+        std::set<std::pair<ll, ll>> used;
+        auto key = [&](ll u, ll v) {
+            return opt.directed ? std::pair{u, v} : std::pair{std::min(u, v), std::max(u, v)};
+        };
+        for (auto [u, v] : raw) used.insert(key(u, v));
+        int miss = 0;
+        while (static_cast<ll>(raw.size()) < m) {
+            auto [u, v] = draw();
+            if (u != v && used.insert(key(u, v)).second) {
+                raw.push_back({u, v});
+                miss = 0;
+                continue;
+            }
+            if (++miss < 64) continue;
+            RawEdges cand;
+            each([&](ll a, ll b) {
+                if (a != b && used.insert(key(a, b)).second) cand.push_back({a, b});
+            });
+            const ll need = m - static_cast<ll>(raw.size());
+            if (static_cast<ll>(cand.size()) < need) gen_error("graph: not enough candidate edges");
+            self().shuffle(cand);
+            cand.resize(need);
+            raw.insert(raw.end(), cand.begin(), cand.end());
+            return;
+        }
+    }
+
+    // 形 shape_in の木の辺（0 始まり、作った順）。mixed で選んだ形は "tag_name=形" のタグにする。
+    RawEdges raw_tree(ll n, TreeShape shape_in, const char* tag_name) {
         TreeShape shape = shape_in;
         if (shape == TreeShape::mixed) {
             static constexpr TreeShape all[] = {TreeShape::random, TreeShape::random, TreeShape::path,
                                                 TreeShape::star, TreeShape::caterpillar, TreeShape::binary,
                                                 TreeShape::deep};
             shape = all[self().uniform(0, std::size(all) - 1)];
+            if (tag_name) self().tag(std::string(tag_name) + "=" + shape_name(shape));
         }
         std::vector<std::pair<ll, ll>> raw;  // 0-indexed, 作った順
         raw.reserve(n > 0 ? n - 1 : 0);

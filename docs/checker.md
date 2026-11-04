@@ -131,7 +131,11 @@ void judge(Judge& j) {
 
 `j.ref` を最後まで読む必要はない。読まなかった分は無視される。
 
+gen.cpp・main.cpp・guchoku.cpp まで揃った例は [examples/checker/lis](../examples/checker/lis/) にある。
+
 ## 例
+
+どの例も、gen.cpp・main.cpp（・guchoku.cpp）まで揃ったものが [examples/checker](../examples/checker/) にあり、そのディレクトリで各 README のコマンド（`st -c checker.cpp`、`--ref` を使う例は `st -c checker.cpp --ref`）を打てば動く。
 
 ### Yes / No と構成
 

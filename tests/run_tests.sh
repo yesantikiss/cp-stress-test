@@ -101,4 +101,12 @@ for ex in guess sort tree arc184_a; do
     check "example_$ex" 0 st -i interactor.cpp -n "$n" --seed 1
 done
 
+# examples/checker の例がそのまま通る
+for ex in lis subset_sum sqrt; do
+    work5="$build_dir/example_checker_$ex"
+    rm -rf "$work5" && cp -r "$root/examples/checker/$ex" "$work5" && cd "$work5"
+    ref=(); [ "$ex" != sqrt ] && ref=(--ref)
+    check "example_checker_$ex" 0 st -c checker.cpp "${ref[@]}" -n 100 --seed 1
+done
+
 [ "$fail" -eq 0 ] && echo "All tests passed" || { echo "Some tests failed"; exit 1; }

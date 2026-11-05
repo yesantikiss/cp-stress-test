@@ -58,7 +58,7 @@ using stress::TreeShape;
 //   STRESS_GEN(all_same) { ... }
 //
 // 1 つの gen.cpp に何個でも書ける。ドライバは順番に混ぜて回す。
-// 今まで通りの void gen(Gen& g) は "gen" という名前の 1 個として扱う。
+// void gen(Gen& g) と書いた場合は "gen" という名前の 1 個として扱う。
 
 namespace stress::detail {
 

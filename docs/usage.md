@@ -247,7 +247,7 @@ main、愚直解、gen、checker、interactor を並列にビルドする。フ�
 | `--san` | `-fsanitize=address,undefined -fno-omit-frame-pointer -g -D_GLIBCXX_DEBUG` を足す |
 | `--cxxflags "..."` | さらにフラグを足す。環境変数 `STRESS_CXXFLAGS` でもいい（`--cxxflags` が優先） |
 
-- include パスには、stress-test のディレクトリ（`stress/gen.hpp` などを読むため）、ACL（問題のディレクトリか `~/atcoder` の `ac-library/`）、`$CP_LIBRARY_DIR`（既定 `~/cp-library`）を入れる。
+- include パスには、stress-test のディレクトリ（`stress/gen.hpp` などを読むため）、ACL（環境変数 `ACL_DIR`、なければ問題のディレクトリの `ac-library/`。`atcoder/` を含むディレクトリを指す）、`$CP_LIBRARY_DIR`（既定 `~/cp-library`）を入れる。
 - 問題のディレクトリに `pch_acl.hpp.gch` があり、ソースが `#include <atcoder/...>` を含むときは、`-include pch_acl.hpp` を付けてプリコンパイル済みヘッダを使う。main と愚直解だけで、`--san` のときは使わない。
 - バイナリは `.stress/bin/<種類>-<ハッシュ>` に置く。ハッシュはソースのパスとフラグから作るので、`--san` の有無などで別のバイナリになる。
 - ソースか、それが include しているファイルが変わったときだけ再ビルドする。

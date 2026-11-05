@@ -427,12 +427,14 @@ class GraphOps {
     }
 
     // 辺の多くが 1 から 3 個の頂点につながる（次数が偏る）。connected ならスターが土台。
+    // strong なら頂点 0 を通る閉路（花びら）を m 本の範囲でできるだけ多く入れる。
     Edges hub_graph(ll n, ll m, const Spec& opt) {
         const ll h = self().uniform(1, std::min<ll>(n, 3));  // 頂点 0 .. h-1 が中心
         RawEdges raw;
         raw.reserve(m);
         ll root = -1;
-        if (opt.connected) raw = base_edges(n, m, opt.strong ? RawEdges{} : raw_tree(n, TreeShape::star, nullptr), opt, root);
+        if (opt.strong) raw = flower(n, m);
+        else if (opt.connected) raw = base_edges(n, m, raw_tree(n, TreeShape::star, nullptr), opt, root);
         auto orient = [&](std::pair<ll, ll> e) {
             if (opt.directed && self().coin()) std::swap(e.first, e.second);
             return e;
@@ -451,15 +453,17 @@ class GraphOps {
 
     // 頂点を一列に並べ、番号の差が w 以下の頂点どうしだけに辺を張る（直径が長い）。
     // connected ならパスが土台。w は 1 から 3 で、m 本入らないときだけ広げる。
+    // strong なら 0 → 2 → 4 → … → 5 → 3 → 1 → 0 の閉路（隣り合う番号の差は 2 以下）が土台で、w は 2 以上。
     Edges path_graph(ll n, ll m, const Spec& opt) {
         auto capacity = [&](ll w) { return (w * n - w * (w + 1) / 2) * (opt.directed ? 2 : 1); };
-        ll w = std::min<ll>(self().uniform(1, 3), std::max<ll>(n - 1, 1));
+        ll w = std::min<ll>(self().uniform(opt.strong ? 2 : 1, 3), std::max<ll>(n - 1, 1));
         if (opt.simple)
             while (w < n - 1 && capacity(w) < m) ++w;
         RawEdges raw;
         raw.reserve(m);
         ll root = -1;
-        if (opt.connected) raw = base_edges(n, m, opt.strong ? RawEdges{} : raw_tree(n, TreeShape::path, nullptr), opt, root);
+        if (opt.strong) raw = zigzag_cycle(n);
+        else if (opt.connected) raw = base_edges(n, m, raw_tree(n, TreeShape::path, nullptr), opt, root);
         auto orient = [&](std::pair<ll, ll> e) {
             if (opt.directed && self().coin()) std::swap(e.first, e.second);
             return e;
@@ -530,6 +534,36 @@ class GraphOps {
             raw.push_back({prev, end});
             for (ll t = k - len; t < k; ++t) placed.push_back(order[t]);
         }
+        return raw;
+    }
+
+    // 頂点 0 を通る閉路（花びら）で強連結にする。頂点 1..n-1 を p 組に分け、組ごとに
+    // 0 → x1 → ... → xk → 0 を張る。p は min(n-1, m-(n-1)) で、m >= 2(n-1) なら 0 との往復だけになる。
+    RawEdges flower(ll n, ll m) {
+        RawEdges raw;
+        if (n == 1) return raw;
+        const ll p = std::min(n - 1, m - (n - 1));
+        std::vector<ll> order(n - 1);
+        std::iota(order.begin(), order.end(), 1);
+        self().shuffle(order);
+        ll k = 0;
+        for (ll len : self().partition(n - 1, p, 1)) {
+            ll prev = 0;
+            for (ll t = 0; t < len; ++t) raw.push_back({prev, order[k]}), prev = order[k++];
+            raw.push_back({prev, 0});
+        }
+        return raw;
+    }
+
+    // 0 → 2 → 4 → … → (奇数を降順) → 1 → 0 の閉路。どの辺も番号の差が 2 以下。向きは半々で逆にする。
+    RawEdges zigzag_cycle(ll n) {
+        RawEdges raw;
+        if (n == 1) return raw;
+        std::vector<ll> order;
+        for (ll v = 0; v < n; v += 2) order.push_back(v);
+        for (ll v = (n - 1) % 2 ? n - 1 : n - 2; v >= 1; v -= 2) order.push_back(v);
+        if (self().coin()) std::reverse(order.begin(), order.end());
+        for (ll k = 0; k < n; ++k) raw.push_back({order[k], order[(k + 1) % n]});
         return raw;
     }
 

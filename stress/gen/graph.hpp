@@ -11,6 +11,9 @@ enum class GraphShape { mixed, random, bipartite, pieces, hub, path };
 enum class DigraphShape { mixed, random, dag, pieces, hub, path };
 // 有向グラフの到達性。none: 指定なし、weak: 弱連結、root: 頂点 1 から全頂点に到達できる、strong: 強連結。
 enum class Reach { none, weak, root, strong };
+// 二部グラフの頂点番号。separate: 左 1..n1 と右 1..n2 の別番号、offset: 左 1..n1 と右 n1+1..n1+n2、
+// merged: 1..n1+n2 をシャッフルした通し番号。
+enum class BipartiteLabel { separate, offset, merged };
 
 struct Edge {
     ll u, v, w;
@@ -22,6 +25,7 @@ struct Edges : std::vector<Edge> {
 
 struct TreeOpt {
     TreeShape shape = TreeShape::mixed;
+    bool ordered = false;  // true なら各辺 "u v" を常に u < v で出す
     Value w{};
 };
 
@@ -33,7 +37,8 @@ struct ParentOpt {
 struct GraphOpt {
     GraphShape shape = GraphShape::mixed;
     bool connected = false;
-    bool simple = true;  // 自己ループと多重辺なし
+    bool simple = true;    // 自己ループと多重辺なし
+    bool ordered = false;  // true なら各辺 "u v" を常に u < v（自己ループは u = v）で出す
     Value w{};
 };
 
@@ -53,8 +58,9 @@ struct DagOpt {
 
 struct BipartiteOpt {
     bool connected = false;
-    bool simple = true;   // 多重辺なし
-    bool merged = false;  // true なら n1+n2 頂点の通し番号をシャッフルして振る
+    bool simple = true;  // 多重辺なし
+    BipartiteLabel label = BipartiteLabel::separate;
+    bool ordered = false;  // true なら各辺 "u v" を常に u < v で出す（label が merged のときだけ）
     Value w{};
 };
 
@@ -67,7 +73,7 @@ class GraphOps {
     Edges tree(ll n, TreeOpt opt = {}) {
         if (n <= 0) gen_error("tree: n must be positive");
         auto raw = raw_tree(n, opt.shape, "tree");
-        return finish_edges(n, raw, opt.w, /*shuffle_labels=*/true, /*directed=*/false);
+        return finish_edges(n, raw, opt.w, /*shuffle_labels=*/true, /*directed=*/false, -1, opt.ordered);
     }
 
     // 根付き木の親の列。
@@ -122,7 +128,12 @@ class GraphOps {
     // 無向グラフ。
     Edges graph(ll n, ll m, GraphOpt opt = {}) {
         if (n <= 0) gen_error("graph: n must be positive");
-        const Spec sp{.name = "graph", .directed = false, .connected = opt.connected, .simple = opt.simple, .w = opt.w};
+        const Spec sp{.name = "graph",
+                      .directed = false,
+                      .connected = opt.connected,
+                      .simple = opt.simple,
+                      .ordered = opt.ordered,
+                      .w = opt.w};
         check_graph(n, m, sp);
         GraphShape shape = opt.shape;
         if (shape == GraphShape::mixed) {
@@ -135,7 +146,8 @@ class GraphOps {
         }
         switch (shape) {
             case GraphShape::bipartite:
-                return bipartite(n, m, {.connected = opt.connected, .simple = opt.simple, .w = opt.w});
+                return bipartite(n, m,
+                                 {.connected = opt.connected, .simple = opt.simple, .ordered = opt.ordered, .w = opt.w});
             case GraphShape::pieces: return pieces_graph(n, m, sp);
             case GraphShape::hub: return hub_graph(n, m, sp);
             case GraphShape::path: return path_graph(n, m, sp);
@@ -209,8 +221,12 @@ class GraphOps {
     }
 
     // 左 n1 頂点、右 n2 頂点の二部グラフ。既定では各辺 "u v" の u が左 (1..n1)、v が右 (1..n2)。
+    // offset なら右は n1+1..n1+n2。
     Edges bipartite(ll n1, ll n2, ll m, BipartiteOpt opt = {}) {
         if (n1 < 0 || n2 < 0 || n1 + n2 <= 0) gen_error("bipartite: n1, n2 must be >= 0 and n1+n2 > 0");
+        if (opt.ordered && opt.label != BipartiteLabel::merged)
+            gen_error("bipartite: .ordered needs .label = BipartiteLabel::merged "
+                      "(separate keeps u on the left, offset is always u < v)");
         const ll max_edges = n1 * n2;
         if (m > max_edges && (opt.simple || max_edges == 0))
             gen_error("bipartite: m=" + std::to_string(m) + " exceeds the maximum " + std::to_string(max_edges) +
@@ -245,10 +261,11 @@ class GraphOps {
                        for (ll a = 0; a < n1; ++a)
                            for (ll b = 0; b < n2; ++b) emit(a, b);
                    });
-        if (opt.merged) {
+        if (opt.label == BipartiteLabel::merged) {
             for (auto& e : raw) e.second += n1;
-            return finish_edges(n1 + n2, raw, opt.w, /*shuffle_labels=*/true, /*directed=*/false);
+            return finish_edges(n1 + n2, raw, opt.w, /*shuffle_labels=*/true, /*directed=*/false, -1, opt.ordered);
         }
+        const ll right_base = opt.label == BipartiteLabel::offset ? n1 : 0;
         std::vector<ll> label_l(n1), label_r(n2);
         std::iota(label_l.begin(), label_l.end(), 0);
         std::iota(label_r.begin(), label_r.end(), 0);
@@ -259,7 +276,7 @@ class GraphOps {
         es.weighted = !std::holds_alternative<std::monostate>(opt.w);
         es.reserve(raw.size());
         for (auto [a, b] : raw) {
-            Edge e{label_l[a] + self().base(), label_r[b] + self().base(), 0};
+            Edge e{label_l[a] + self().base(), right_base + label_r[b] + self().base(), 0};
             if (es.weighted) e.w = self().draw(opt.w);
             es.push_back(e);
         }
@@ -270,7 +287,7 @@ class GraphOps {
     Edges bipartite(ll n, ll m, BipartiteOpt opt = {}) {
         if (n <= 0) gen_error("bipartite: n must be positive");
         if (n == 1) {
-            opt.merged = true;
+            opt.label = BipartiteLabel::merged;
             return bipartite(1, 0, m, opt);
         }
         std::vector<ll> ok;  // m 本入る左の大きさ
@@ -281,7 +298,7 @@ class GraphOps {
                       std::to_string((n / 2) * (n - n / 2)) + " for a simple bipartite graph with n=" +
                       std::to_string(n));
         const ll n1 = self().choice(ok);
-        opt.merged = true;
+        opt.label = BipartiteLabel::merged;
         return bipartite(n1, n - n1, m, opt);
     }
 
@@ -296,6 +313,7 @@ class GraphOps {
         bool root = false;   // 有向: 頂点 0 から全頂点に到達できる
         bool strong = false; // 有向: 強連結
         bool simple;
+        bool ordered = false;  // 無向: 各辺を u < v で出す
         Value w;
     };
 
@@ -367,7 +385,7 @@ class GraphOps {
                  for (ll u = 0; u < n; ++u)
                      for (ll v = 0; v < n; ++v) emit(u, v);
              });
-        return finish_edges(n, raw, opt.w, /*shuffle_labels=*/true, opt.directed, root);
+        return finish_edges(n, raw, opt.w, /*shuffle_labels=*/true, opt.directed, root, opt.ordered);
     }
 
     // 頂点を 2 つ以上の組に分け、組の中だけに辺を張る。連結成分が複数になる。
@@ -405,7 +423,7 @@ class GraphOps {
                  for (ll u = 0; u < n; ++u)
                      for (ll v = lo[u]; v <= hi[u]; ++v) emit(u, v);
              });
-        return finish_edges(n, raw, opt.w, /*shuffle_labels=*/true, opt.directed);
+        return finish_edges(n, raw, opt.w, /*shuffle_labels=*/true, opt.directed, -1, opt.ordered);
     }
 
     // 辺の多くが 1 から 3 個の頂点につながる（次数が偏る）。connected ならスターが土台。
@@ -428,7 +446,7 @@ class GraphOps {
                  for (ll u = 0; u < n; ++u)
                      for (ll v = 0; v < n; ++v) emit(u, v);
              });
-        return finish_edges(n, raw, opt.w, /*shuffle_labels=*/true, opt.directed, root);
+        return finish_edges(n, raw, opt.w, /*shuffle_labels=*/true, opt.directed, root, opt.ordered);
     }
 
     // 頂点を一列に並べ、番号の差が w 以下の頂点どうしだけに辺を張る（直径が長い）。
@@ -456,7 +474,7 @@ class GraphOps {
                  for (ll u = 0; u < n; ++u)
                      for (ll v = std::max<ll>(0, u - w); v <= std::min(n - 1, u + w); ++v) emit(u, v);
              });
-        return finish_edges(n, raw, opt.w, /*shuffle_labels=*/true, opt.directed, root);
+        return finish_edges(n, raw, opt.w, /*shuffle_labels=*/true, opt.directed, root, opt.ordered);
     }
 
     // connected のときの土台。tree は無向の全域木（strong のときは空で、使わない）。
@@ -653,8 +671,9 @@ class GraphOps {
     }
 
     // root >= 0 なら、添字 root の頂点を番号 base()（1 始まりなら 1）にする。
+    // 無向のとき、ordered なら各辺を u <= v に、そうでなければ向きをランダムにする。
     Edges finish_edges(ll n, std::vector<std::pair<ll, ll>>& raw, const Value& w, bool shuffle_labels, bool directed,
-                       ll root = -1) {
+                       ll root = -1, bool ordered = false) {
         std::vector<ll> label(n);
         std::iota(label.begin(), label.end(), 0);
         if (shuffle_labels) self().shuffle(label);
@@ -664,7 +683,7 @@ class GraphOps {
         es.weighted = !std::holds_alternative<std::monostate>(w);
         es.reserve(raw.size());
         for (auto [u, v] : raw) {
-            if (!directed && self().coin()) std::swap(u, v);
+            if (!directed && (ordered ? label[u] > label[v] : self().coin())) std::swap(u, v);
             Edge e{label[u] + self().base(), label[v] + self().base(), 0};
             if (es.weighted) e.w = self().draw(w);
             es.push_back(e);

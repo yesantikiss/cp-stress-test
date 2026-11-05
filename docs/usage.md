@@ -8,8 +8,8 @@ st                 # main.cpp と guchoku.cpp を gen.cpp の入力で 1000 回�
 st -n 5000 --seed 42
 st -g random -g all_same  # 使う生成器を絞る
 st -t 60           # 60 秒回す
-st -c checker.cpp  # スペシャルジャッジ（--ref で愚直解の出力を第 3 引数に渡す）
-st -i interactor.cpp  # インタラクティブ（docs/interactive.md）
+st -c              # checker.cpp でスペシャルジャッジ（--ref で愚直解の出力を第 3 引数に渡す）
+st -i              # interactor.cpp でインタラクティブ（docs/interactive.md）
 st --tl 1 --san    # TL 1 秒、ASan / UBSan / _GLIBCXX_DEBUG
 st --cmp float:1e-6
 st repro SEED:CAP:NAME    # 失敗時に表示されたケースを再現
@@ -71,9 +71,9 @@ copied failing input -> in.txt
 | --- | --- |
 | `--main SRC` | 解答（既定 main.cpp） |
 | `--guchoku SRC` | 愚直解（既定 guchoku.cpp） |
-| `-c SRC` `--checker SRC` | checker で判定する（[checker.cpp の書き方](checker.md)）。愚直解は `--ref` のときだけ使う |
+| `-c [SRC]` `--checker [SRC]` | checker で判定する。SRC を省略すると checker.cpp（[checker.cpp の書き方](checker.md)）。愚直解は `--ref` のときだけ使う |
 | `--ref` | checker モードでも愚直解を走らせ、出力を checker の第 3 引数で渡す |
-| `-i SRC` `--interactor SRC` | インタラクティブ（[インタラクティブ問題](interactive.md)）。`-c` `--ref` `--cmp` とは一緒に使えない |
+| `-i [SRC]` `--interactor [SRC]` | インタラクティブ。SRC を省略すると interactor.cpp（[インタラクティブ問題](interactive.md)）。`-c` `--ref` `--cmp` とは一緒に使えない |
 | `--cmp MODE` | 比較方法（[比較方法](#比較方法)） |
 | `--tl SEC` | main の制限時間（既定 2 秒） |
 | `--ref-tl SEC` | 愚直解の制限時間（既定 10 秒） |
@@ -139,6 +139,7 @@ st repro SEED:CAP:NAME [run と同じオプション]
 - 失敗時の `case=...` をそのまま渡す。CAP を `-` にすると上限なし、NAME を省略すると先頭の生成器を使う。
 - 再現すれば失敗として保存し、表示する（終了コード 1）。再現しなければ `OK ... (再現しなかった)` と入力の場所を出す（終了コード 0）。
 - 失敗時に表示される `st repro ...` には `-c` / `-i` だけが付く。`--main`、`--ref`、`--cmp`、`--tl` などを付けて回していたときは、同じものを自分で付ける。
+- `st repro -c SEED:CAP:NAME` のように `-c` / `-i` の直後にケースを書くと、argparse の上ではケースが SRC として読まれる。この形（数字で始まり `:` で区切ったもの）は st がケースとして扱い直し、SRC は既定の checker.cpp / interactor.cpp にする。
 
 ## st make
 

@@ -6,7 +6,7 @@
 - 添字が増加しているか、値が増加しているかを checker で確かめる
 
 ```bash
-st -c checker.cpp --ref
+st -c --ref
 ```
 
 説明は [docs/checker.md](../../../docs/checker.md#--ref-で愚直解の出力を使う) にある。

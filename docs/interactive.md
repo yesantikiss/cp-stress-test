@@ -1,12 +1,12 @@
 # インタラクティブ問題
 
-interactor.cpp を書いて `st -i interactor.cpp` で回す。main.cpp とは st が間に入ってつなぎ、やり取りを全部 `transcript.txt` に残す。
+interactor.cpp を書いて `st -i` で回す。main.cpp とは st が間に入ってつなぎ、やり取りを全部 `transcript.txt` に残す。
 
 ```bash
 st init -i                 # gen.cpp と interactor.cpp の雛形を置く
-st -i interactor.cpp       # main.cpp と interactor をつないで 1000 回
-st -i interactor.cpp -t 60 --tl 1 --san
-st repro SEED:CAP:NAME -i interactor.cpp
+st -i                      # main.cpp と interactor をつないで 1000 回
+st -i -t 60 --tl 1 --san
+st repro SEED:CAP:NAME -i
 st last                    # transcript も表示する
 ```
 
@@ -129,7 +129,7 @@ bool r = ad.reply([&](const std::vector<int>& p) { return p[a - 1] < p[b - 1]; }
 
 ### 例
 
-`examples/adaptive/` に、gen.cpp、interactor.cpp、正しい main.cpp をそろえた例がある。フォルダに入って `st -i interactor.cpp` でそのまま動く。
+`examples/adaptive/` に、gen.cpp、interactor.cpp、正しい main.cpp をそろえた例がある。フォルダに入って `st -i` でそのまま動く。
 
 | 例 | 隠し情報 | 使うもの |
 | --- | --- | --- |

@@ -27,12 +27,17 @@ check tle         1 st --main main_tle.cpp --seed 3 --tl 1
 check checker_ok  0 st -c checker.cpp --main main_ok.cpp -n 300 --seed 5
 check checker_wa  1 st -c checker.cpp --main main_wa.cpp --seed 5
 check checker_ref 0 st -c checker.cpp --ref --main main_ok.cpp -n 100 --seed 5
+check checker_default_ok 0 st -c --main main_ok.cpp -n 100 --seed 5
+check checker_default_wa 1 st --main main_wa.cpp --seed 5 -c
+check checker_default_ref 0 st -c --ref --main main_ok.cpp -n 100 --seed 5
 
 # repro: 直前の失敗の seed:cap で同じ入力が出る
 st --main main_wa.cpp --seed 7 >/dev/null 2>&1
 case_id="$(python3 -c 'import json;m=json.load(open(".stress/last/meta.json"));print(str(m["seed"])+":"+str(m["cap"]))')"
 cp .stress/last/in.txt "$build_dir/expected_in.txt"
 check repro 1 st repro "$case_id" --main main_wa.cpp
+# -c の直後にケース ID を書いても、ケース ID として扱う
+check repro_c_swap 1 st repro --main main_wa.cpp -c "$case_id"
 if cmp -s .stress/last/in.txt "$build_dir/expected_in.txt"; then echo "ok   repro_same_input"; else echo "FAIL repro_same_input"; fail=1; fi
 check last_to_in 0 st last --to-in
 if cmp -s in.txt "$build_dir/expected_in.txt"; then echo "ok   to_in_copied"; else echo "FAIL to_in_copied"; fail=1; fi
@@ -78,6 +83,7 @@ work3="$build_dir/interactive"
 rm -rf "$work3" && cp -r "$root/tests/interactive" "$work3" && cd "$work3"
 check inter_ok      0 st -i interactor.cpp --main main_ok.cpp -n 300 --seed 1
 check inter_wa      1 st -i interactor.cpp --main main_wa.cpp --seed 1
+check inter_default 0 st -i --main main_ok.cpp -n 100 --seed 1
 grep -q '"kind": "WA"' .stress/last/meta.json && grep -q '^> ! ' .stress/last/transcript.txt \
     && echo "ok   inter_transcript" || { echo "FAIL inter_transcript"; fail=1; }
 check inter_limit   1 st -i interactor.cpp --main main_many.cpp --seed 1 -n 1000 --no-shrink

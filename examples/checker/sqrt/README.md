@@ -6,7 +6,7 @@ x² = a となる実数 x を 1 つ出力する（絶対誤差・相対誤差 1e
 - 愚直解はいらないので guchoku.cpp はない
 
 ```bash
-st -c checker.cpp
+st -c
 ```
 
 説明は [docs/checker.md](../../../docs/checker.md#実数) にある。

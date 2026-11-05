@@ -7,5 +7,5 @@
 - 列は 0 始まりなので、問題の p_a は `p[a - 1]` で読む
 
 ```bash
-st -i interactor.cpp
+st -i
 ```

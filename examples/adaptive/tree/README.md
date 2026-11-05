@@ -7,5 +7,5 @@
 - 辺の順番と向きをそろえてから候補と比べる
 
 ```bash
-st -i interactor.cpp
+st -i
 ```

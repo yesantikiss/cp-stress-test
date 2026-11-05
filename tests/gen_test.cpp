@@ -228,6 +228,7 @@ static bool graph_has_shape(ll n, ll m, const Edges& es, std::string_view shape,
     }
     if (shape == "hub") {
         const ll base = strong ? 2 * (n - 1) : connected ? n - 1 : 0;
+        if (m < base) return true;  // strong で往復が入らないときは、0 を通る長い閉路が土台になる
         const bool sparse = n >= 40 && m - base <= n / 2 && (connected || m >= 20);
         if (!sparse) return true;
         return best_hub_cover(n, es) * 10 >= m * 6;
@@ -737,22 +738,26 @@ static void test_digraph_strong_shapes() {
 
 static void test_digraph_mixed() {
     std::set<std::string> seen;
-    const Reach reaches[] = {Reach::none, Reach::weak, Reach::root};
-    for (std::uint64_t seed = 0; seed < 600; ++seed) {
+    const Reach reaches[] = {Reach::none, Reach::weak, Reach::root, Reach::strong};
+    for (std::uint64_t seed = 0; seed < 800; ++seed) {
         Gen t(seed);
         const bool big = seed % 2;
         ll n = big ? t.i(40, 60) : t.i(2, 12);
-        Reach r = reaches[t.uniform(0, 2)];
+        Reach r = reaches[t.uniform(0, 3)];
         bool simple = t.coin(0.8);
-        ll lo = r == Reach::none ? 0 : n - 1, mx = n * (n - 1) / 2;  // dag も候補に入る本数まで
+        ll lo = r == Reach::none ? 0 : r == Reach::strong ? n : n - 1;
+        ll mx = r == Reach::strong ? n * (n - 1) : n * (n - 1) / 2;  // strong 以外は dag も候補に入る本数まで
         if (big) mx = lo + n / 2;
+        if (big && r == Reach::strong && t.coin()) lo = 2 * (n - 1), mx = lo + n / 2;  // hub の判定が効く本数
         ll m = t.i(lo, mx);
         auto es = t.digraph(n, m, {.reach = r, .simple = simple});
         auto s = shape_tag(t, "digraph");
         CHECK_OR(!s.empty(), continue);
         CHECK_OR(check_edges(n, m, es, true, simple, r != Reach::none) >= 0, continue);
         if (r == Reach::root) CHECK(reach_count(n, es, 1) == n);
-        CHECK(graph_has_shape(n, m, es, s, true, simple, r != Reach::none));
+        if (r == Reach::strong)
+            for (ll v = 1; v <= n; ++v) CHECK(reach_count(n, es, v) == n);
+        CHECK(graph_has_shape(n, m, es, s, true, simple, r != Reach::none, r == Reach::strong));
         seen.insert(s);
     }
     CHECK(seen.size() == 5);

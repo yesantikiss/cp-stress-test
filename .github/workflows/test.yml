@@ -1,0 +1,21 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Versions
+        run: g++ --version | head -1 && python3 --version
+      # ubuntu-24.04 のカーネル設定だと AddressSanitizer が起動直後に落ちることがあるので下げる
+      - name: Allow AddressSanitizer
+        run: sudo sysctl vm.mmap_rnd_bits=28
+      - name: Run tests
+        run: bash tests/run_tests.sh

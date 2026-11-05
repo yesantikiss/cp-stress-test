@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# gen.hpp の単体テストと、わざとバグらせた解でのドライバの動作確認。
+# gen.hpp / adaptive.hpp の単体テストと、わざとバグらせた解でのドライバの動作確認。
+# 何を確かめているかは docs/testing.md。
 set -uo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 build_dir="${TMPDIR:-/tmp}/cp-stress-test-tests"
@@ -12,10 +13,16 @@ check() {  # check <name> <expected exit> <command...>
     if [ "$got" -eq "$want" ]; then echo "ok   $name"; else echo "FAIL $name (exit $got, want $want)"; tail -20 "$build_dir/$name.log"; fail=1; fi
 }
 
-g++ -std=gnu++20 -O2 -Wall -Wextra -Werror -fsanitize=address,undefined -I"$root" \
-    "$root/tests/gen_test.cpp" -o "$build_dir/gen_test" && check gen_test 0 "$build_dir/gen_test" || fail=1
-g++ -std=gnu++20 -O2 -Wall -Wextra -Werror -fsanitize=address,undefined -I"$root" \
-    "$root/tests/adaptive_test.cpp" -o "$build_dir/adaptive_test" && check adaptive_test 0 "$build_dir/adaptive_test" || fail=1
+# C++ の単体テスト。テストごとの ok / FAIL をそのまま出す（行頭に "gen_test: " を付ける）
+for t in gen_test adaptive_test; do
+    if g++ -std=gnu++20 -O2 -Wall -Wextra -Werror -fsanitize=address,undefined -I"$root" \
+        "$root/tests/$t.cpp" -o "$build_dir/$t" 2>"$build_dir/$t.build.log"; then
+        "$build_dir/$t" | sed "s/^/$t: /"
+        [ "${PIPESTATUS[0]}" -eq 0 ] || fail=1
+    else
+        echo "FAIL $t (build)"; tail -20 "$build_dir/$t.build.log"; fail=1
+    fi
+done
 
 work="$build_dir/sample"
 rm -rf "$work" && cp -r "$root/tests/sample" "$work" && cd "$work"

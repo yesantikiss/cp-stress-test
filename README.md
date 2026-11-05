@@ -73,6 +73,7 @@ found after 1 cases (0.0s)
 - [gen.cpp の書き方](docs/gen.md): 生成器と `stress/gen.hpp` の関数
 - [checker.cpp の書き方](docs/checker.md): スペシャルジャッジと `stress/judge.hpp`
 - [インタラクティブ問題](docs/interactive.md): interactor.cpp と `st -i`
+- [このライブラリのテスト](docs/testing.md): 何を確かめているか、CI、テストしていないもの
 
 動く例は [examples/](examples) にある（checker と適応的な interactor）。
 
@@ -86,3 +87,5 @@ found after 1 cases (0.0s)
 ```bash
 bash tests/run_tests.sh
 ```
+
+何を確かめているかは [docs/testing.md](docs/testing.md)。

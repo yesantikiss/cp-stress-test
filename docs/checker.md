@@ -1,6 +1,6 @@
 # checker.cpp
 
-答えが複数ある問題では、愚直解と出力を比べる代わりに checker で判定する。`stress/judge.hpp` を include して `judge` を書き、`st -c checker.cpp` で回す。
+答えが複数ある問題では、愚直解と出力を比べる代わりに checker で判定する。`stress/judge.hpp` を include して `judge` を書き、`st -c` で回す（checker.cpp 以外の名前なら `st -c foo.cpp`）。
 
 ```cpp
 #include "stress/judge.hpp"
@@ -15,8 +15,8 @@ void judge(Judge& j) {
 
 ```bash
 st init -c              # gen.cpp と checker.cpp の雛形を置く
-st -c checker.cpp       # main.cpp の出力を checker で判定する（guchoku.cpp は使わない）
-st -c checker.cpp --ref # 愚直解も走らせ、その出力を j.ref で読めるようにする
+st -c                  # main.cpp の出力を checker で判定する（guchoku.cpp は使わない）
+st -c --ref            # 愚直解も走らせ、その出力を j.ref で読めるようにする
 ```
 
 | 書き方 | 意味 |
@@ -135,7 +135,7 @@ gen.cpp・main.cpp・guchoku.cpp まで揃った例は [examples/checker/lis](..
 
 ## 例
 
-どの例も、gen.cpp・main.cpp（・guchoku.cpp）まで揃ったものが [examples/checker](../examples/checker/) にあり、そのディレクトリで各 README のコマンド（`st -c checker.cpp`、`--ref` を使う例は `st -c checker.cpp --ref`）を打てば動く。
+どの例も、gen.cpp・main.cpp（・guchoku.cpp）まで揃ったものが [examples/checker](../examples/checker/) にあり、そのディレクトリで各 README のコマンド（`st -c`、`--ref` を使う例は `st -c --ref`）を打てば動く。
 
 ### Yes / No と構成
 

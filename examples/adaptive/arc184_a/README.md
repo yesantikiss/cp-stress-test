@@ -16,5 +16,5 @@ main.cpp は 19 枚と 21 枚の組を 25 個ずつ作り、組の中を順に�
 組を全部 20 枚にすると、ある組が 10 枚と 10 枚に分かれたときにどちらが偽物か決まらない。そう書き換えた解は、この interactor だと 1 ケース目で「answer is not determined yet (2 sets left)」になる。
 
 ```bash
-st -i interactor.cpp -n 30
+st -i -n 30
 ```

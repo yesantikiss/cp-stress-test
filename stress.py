@@ -7,8 +7,8 @@
   st                      # 1000 回
   st -n 5000 --seed 42
   st -t 60                # 60 秒
-  st -c checker.cpp       # スペシャルジャッジ
-  st -i interactor.cpp    # インタラクティブ
+  st -c                   # スペシャルジャッジ（checker.cpp。別名なら -c foo.cpp）
+  st -i                   # インタラクティブ（interactor.cpp。別名なら -i foo.cpp）
   st -g max -g all_same  # STRESS_GEN の生成器を絞る
   st repro 12345:7:gen    # 失敗ケースを 1 つ再現（seed:cap:生成器）
   st make max -n 5 -o cases/   # 入力ファイルだけ書き出す
@@ -29,6 +29,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -709,10 +710,14 @@ def shrink(progs: Programs, case: Case, run_dir: Path, opt: argparse.Namespace,
 # ---------------------------------------------------------------- ビルドの準備
 
 
+CASE_ID_RE = re.compile(r"^\d+(:.*)?$")  # SEED[:CAP[:NAME]]
+
+
 def find_source(workdir: Path, name: str, what: str) -> Path:
     p = (workdir / name)
     if not p.exists():
-        hint = "  (st init で雛形を置けます)" if what == "generator" else ""
+        hint = {"generator": "  (st init で雛形を置けます)", "checker": "  (st init -c で雛形を置けます)",
+                "interactor": "  (st init -i で雛形を置けます)"}.get(what, "")
         die(f"{what} not found: {p}{hint}")
     return p
 
@@ -1028,9 +1033,11 @@ def add_common(p: argparse.ArgumentParser) -> None:
     add_build(p)
     p.add_argument("--main", default="main.cpp", help="解答 (default: main.cpp)")
     p.add_argument("--guchoku", default="guchoku.cpp", help="愚直解 (default: guchoku.cpp)")
-    p.add_argument("-c", "--checker", metavar="SRC", help="checker モード（例: -c checker.cpp）")
+    p.add_argument("-c", "--checker", metavar="SRC", nargs="?", const="checker.cpp",
+                   help="checker モード。SRC を省略すると checker.cpp（例: -c / -c foo.cpp）")
     p.add_argument("--ref", action="store_true", help="checker モードでも愚直解を走らせ、出力を第 3 引数で渡す")
-    p.add_argument("-i", "--interactor", metavar="SRC", help="インタラクティブ（例: -i interactor.cpp）。愚直解は使わない")
+    p.add_argument("-i", "--interactor", metavar="SRC", nargs="?", const="interactor.cpp",
+                   help="インタラクティブ。SRC を省略すると interactor.cpp（例: -i / -i foo.cpp）。愚直解は使わない")
     p.add_argument("--tl", type=float, default=2.0, help="main の制限時間 [s] (default: 2)")
     p.add_argument("--ref-tl", type=float, default=10.0, help="愚直解の制限時間 [s] (default: 10)")
     p.add_argument("--checker-tl", type=float, default=10.0, help="checker / interactor の制限時間 [s] (default: 10)")
@@ -1068,9 +1075,9 @@ def parse(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--shrink-tries", type=int, default=200, help="縮小で cap 1 つあたりに試す回数 (default: 200)")
     p.add_argument("--shrink-time", type=float, default=20.0, help="縮小にかける時間の上限 [s] (default: 20)")
 
-    p = sub.add_parser("repro", help="SEED:CAP:NAME のケースを 1 つ再現する")
+    p = p_repro = sub.add_parser("repro", help="SEED:CAP:NAME のケースを 1 つ再現する")
     add_common(p)
-    p.add_argument("case", help="SEED:CAP:NAME（失敗時に表示されるもの）")
+    p.add_argument("case", nargs="?", help="SEED:CAP:NAME（失敗時に表示されるもの）")
 
     p = sub.add_parser("make", help="入力ファイルだけ書き出す")
     add_build(p)
@@ -1098,7 +1105,18 @@ def parse(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--force", action="store_true", help="同じ名前のファイルがあっても上書きする")
     p.add_argument("name", nargs="?", help="置くファイルの名前（gen.cpp だけを置くとき。例: st init gen2.cpp）")
 
-    return ap.parse_args(argv)
+    opt = ap.parse_args(argv)
+    if opt.command == "repro" and opt.case is None:
+        # st repro -c SEED:CAP:NAME と書くと、-c がケース ID を SRC として取ってしまう
+        for attr, default in (("checker", "checker.cpp"), ("interactor", "interactor.cpp")):
+            v = getattr(opt, attr)
+            if v and CASE_ID_RE.match(v):
+                opt.case = v
+                setattr(opt, attr, default)
+                break
+        else:
+            p_repro.error("the following arguments are required: case")
+    return opt
 
 
 def main(argv: list[str]) -> int:

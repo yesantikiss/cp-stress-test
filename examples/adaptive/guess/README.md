@@ -7,5 +7,5 @@
 - 二分探索で 1 つに絞れる前に当てずっぽうで答えると WA になる
 
 ```bash
-st -i interactor.cpp
+st -i
 ```

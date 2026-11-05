@@ -7,7 +7,7 @@
 - main が見つけたのに guchoku が `No` なら、愚直解のバグとして `j.fail` にする
 
 ```bash
-st -c checker.cpp --ref
+st -c --ref
 ```
 
 説明は [docs/checker.md](../../../docs/checker.md#yes--no-と構成) にある。

@@ -201,6 +201,7 @@ auto a = g.seq(n, Range{-5, 5}, {.shape = SeqShape::edge});
 auto es = g.tree(n);                                        // 形は混ぜる
 auto es = g.tree(n, {.shape = TreeShape::path});
 auto es = g.tree(n, {.shape = TreeShape::star, .w = Range{1, 100}});
+auto es = g.tree(n, {.ordered = true});                     // 各辺 u v を常に u < v で出す
 g.out(es);                                                  // 1 本 1 行で n-1 行
 ```
 
@@ -211,6 +212,7 @@ g.out(es);                                                  // 1 本 1 行で n-
 | オプション | 既定 | 意味 |
 | --- | --- | --- |
 | `.shape` | `TreeShape::mixed` | 木の形（下の表） |
+| `.ordered` | `false` | 各辺 `u v` を常に `u < v` で出す。「u_i < v_i」の制約がある問題向け |
 | `.w` | なし | 重み（Range かラムダ） |
 
 | `.shape` | 形 |
@@ -223,7 +225,7 @@ g.out(es);                                                  // 1 本 1 行で n-
 | `TreeShape::deep` | 各頂点の親を直前の 1 から 3 頂点から選ぶ、深い木 |
 | `TreeShape::mixed`（省略時） | 上のどれかを選ぶ（random が 2/7、他は 1/7 ずつ） |
 
-どの形でも、頂点番号はランダムに振り直し、辺の順番と各辺の `u v` の向きもシャッフルする。なので path でも `1-2-3-...` の順には出ない。根を 1 にしたい問題では、自分で番号を付け直す必要がある。
+どの形でも、頂点番号はランダムに振り直し、辺の順番と各辺の `u v` の向きもシャッフルする（`.ordered` なら向きは `u < v` にそろえる）。なので path でも `1-2-3-...` の順には出ない。根を 1 にしたい問題では、自分で番号を付け直す必要がある。
 
 ## 根付き木（親の列）
 
@@ -263,6 +265,7 @@ auto es = g.graph(n, m);                                    // 単純な無向�
 auto es = g.graph(n, m, {.connected = true, .w = Range{1, 1000000000}});
 auto es = g.graph(n, m, {.simple = false});                 // 自己ループと多重辺あり
 auto es = g.graph(n, m, {.shape = GraphShape::hub});        // 形を指定
+auto es = g.graph(n, m, {.ordered = true});                 // 各辺 u v を常に u < v で出す
 ```
 
 | 関数 | 返すもの |
@@ -276,6 +279,7 @@ auto es = g.graph(n, m, {.shape = GraphShape::hub});        // 形を指定
 | `.shape` | `GraphShape::mixed` | 辺の張り方（下の表） |
 | `.connected` | `false` | 連結にする。先に全域木を入れてから残りの辺を足す。`m >= n - 1` が必要 |
 | `.simple` | `true` | 自己ループと多重辺を作らない。`false` だとどちらも出る |
+| `.ordered` | `false` | 各辺 `u v` を常に `u < v`（自己ループは `u = v`）で出す。「u_i < v_i」の制約がある問題向け |
 | `.w` | なし | 重み（Range かラムダ） |
 
 | `.shape` | 形 |
@@ -294,7 +298,7 @@ mixed は random を 2 つ、hub と path を 1 つずつ入れた候補に、�
 
 なので連結でなければ random が 2/6、他が 1/6 ずつになる。木は混ぜない。木も試したいときは、`m = n - 1` で `g.tree(n)` を出す生成器を STRESS_GEN で別に作る。そうすれば失敗したときに、どの生成器だったかで木かどうかも分かる。
 
-形を指定したときに条件に合わなければエラーになる（`connected` で pieces、m が多すぎるなど）。単純グラフで `m` が n(n-1)/2 を超えるとエラー。辺の順番と頂点番号は木と同じくシャッフルされ、各辺の `u v` の向きもランダム。
+形を指定したときに条件に合わなければエラーになる（`connected` で pieces、m が多すぎるなど）。単純グラフで `m` が n(n-1)/2 を超えるとエラー。辺の順番と頂点番号は木と同じくシャッフルされ、各辺の `u v` の向きもランダム（`.ordered` なら `u < v`）。
 
 ## 有向グラフ
 
@@ -373,7 +377,8 @@ auto es = g.dag(n, m, {.increasing = true});                // 常に u < v
 
 ```cpp
 auto es = g.bipartite(n1, n2, m);                           // 左 n1 頂点、右 n2 頂点
-auto es = g.bipartite(n1, n2, m, {.merged = true});         // n1+n2 頂点の通し番号
+auto es = g.bipartite(n1, n2, m, {.label = BipartiteLabel::offset});  // 右を n1+1 から
+auto es = g.bipartite(n1, n2, m, {.label = BipartiteLabel::merged});  // n1+n2 頂点の通し番号
 auto es = g.bipartite(n, m, {.connected = true});           // 総頂点数だけ指定
 ```
 
@@ -382,14 +387,21 @@ auto es = g.bipartite(n, m, {.connected = true});           // 総頂点数だ�
 | `g.bipartite(n1, n2, m, {...})` | 左 n1 頂点、右 n2 頂点、m 辺の二部グラフの辺のリスト |
 | `g.bipartite(n, m, {...})` | 総頂点数 n の二部グラフ。左右の大きさは m 本の辺が入る分け方からランダムに選ぶ |
 
-- `bipartite(n1, n2, m)`: 既定で左右に別々の番号を振る。各辺 `u v` の `u` が左（1 から n1）、`v` が右（1 から n2）で、マッチングの問題によくある入力形式になる。`.merged = true` にすると、n1+n2 頂点に通し番号をシャッフルして振り、各辺の向きもランダムにする。「二部グラフか判定せよ」のような、普通のグラフとして入力される問題向け。
-- `bipartite(n, m)`: 番号は常に通し番号（`.merged` は無視される）。
+- `bipartite(n1, n2, m)`: 番号の振り方は `.label` で選ぶ（下の表）。
+- `bipartite(n, m)`: 番号は常に `BipartiteLabel::merged`（`.label` は無視される）。
+
+| `.label` | 番号の振り方 |
+| --- | --- |
+| `BipartiteLabel::separate`（省略時） | 左右に別々の番号を振る。各辺 `u v` の `u` が左（1 から n1）、`v` が右（1 から n2）。マッチングの問題によくある入力形式 |
+| `BipartiteLabel::offset` | 左は 1 から n1、右は n1+1 から n1+n2。各辺 `u v` の `u` が左、`v` が右なので、常に `u < v` になる。「頂点 1..N が左、N+1..N+M が右」の形式の問題向け |
+| `BipartiteLabel::merged` | 1 から n1+n2 をシャッフルして振る。どの番号が左になるかも、各辺の `u` と `v` のどちらが左かもランダム。「二部グラフか判定せよ」のような、普通のグラフとして入力される問題向け |
 
 | オプション | 既定 | 意味 |
 | --- | --- | --- |
 | `.connected` | `false` | 連結にする。先に二部グラフの全域木を入れてから残りの辺を足す。`m >= n1 + n2 - 1` と、両側が 1 頂点以上あることが必要 |
 | `.simple` | `true` | 多重辺を作らない |
-| `.merged` | `false` | 通し番号にする（上の説明） |
+| `.label` | `BipartiteLabel::separate` | 頂点番号の振り方（上の表） |
+| `.ordered` | `false` | 各辺 `u v` を常に `u < v` で出す（`u` が左とは限らない）。`BipartiteLabel::merged` のときだけ使え、それ以外で指定するとエラー |
 | `.w` | なし | 重み（Range かラムダ） |
 
 単純な二部グラフの辺の最大数は n1 * n2。無向のみ。

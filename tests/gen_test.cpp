@@ -190,6 +190,10 @@ int main() {
         assert(calls == 9 && es2.weighted);
         g.one_indexed = false;
         assert(is_tree(10, g.tree(10), 0));
+        for (int k = 0; k < 50; ++k) {
+            auto es3 = g.tree(g.i(1, 12), {.ordered = true});
+            for (auto& e : es3) assert(e.u < e.v);
+        }
         g.one_indexed = true;
     }
     // グラフ
@@ -257,9 +261,9 @@ int main() {
         auto es = g.dag(4, 3, {.w = Range{7, 7}});
         assert(es.weighted && es[0].w == 7);
     }
-    // 二部グラフ（左右別番号 / 通し番号 / 総頂点数だけ）
-    for (int k = 0; k < 600; ++k) {
-        int mode = k % 3;
+    // 二部グラフ（左右別番号 / 通し番号 / 総頂点数だけ / 右をずらした番号）
+    for (int k = 0; k < 800; ++k) {
+        int mode = k % 4;
         ll n1 = g.i(0, 7), n2 = g.i(0, 7);
         if (mode == 2) n1 = g.i(1, 12), n2 = 0;
         if (n1 + n2 == 0) continue;
@@ -267,11 +271,16 @@ int main() {
         bool connected = g.coin(), simple = g.coin(0.8);
         ll mx = mode == 2 ? (n / 2) * (n - n / 2) : n1 * n2;
         if (connected && n >= 2 && mode != 2 && (n1 == 0 || n2 == 0)) continue;
+        bool ordered = (mode == 1 || mode == 2) && g.coin();
         ll lo = connected ? n - 1 : 0;
         if (lo > mx) continue;
         ll m = simple || mx == 0 ? g.i(lo, mx) : g.i(lo, mx + 5);
-        Edges es = mode == 2 ? g.bipartite(n, m, {.connected = connected, .simple = simple})
-                             : g.bipartite(n1, n2, m, {.connected = connected, .simple = simple, .merged = mode == 1});
+        const BipartiteLabel label = mode == 0   ? BipartiteLabel::separate
+                                     : mode == 3 ? BipartiteLabel::offset
+                                                 : BipartiteLabel::merged;
+        Edges es = mode == 2 ? g.bipartite(n, m, {.connected = connected, .simple = simple, .ordered = ordered})
+                             : g.bipartite(n1, n2, m,
+                                           {.connected = connected, .simple = simple, .label = label, .ordered = ordered});
         assert((ll)es.size() == m);
         std::set<std::pair<ll, ll>> seen;
         std::vector<ll> p(n);
@@ -279,7 +288,12 @@ int main() {
         std::function<ll(ll)> f = [&](ll x) { return p[x] == x ? x : p[x] = f(p[x]); };
         std::vector<std::vector<ll>> adj(n);
         for (auto& e : es) {
-            if (mode == 0) {
+            if (ordered) assert(e.u < e.v);
+            if (mode == 3) {  // 右は n1+1..n
+                assert(1 <= e.u && e.u <= n1 && n1 < e.v && e.v <= n);
+                if (simple) assert(seen.insert({e.u, e.v}).second);
+                p[f(e.u - 1)] = f(e.v - 1);
+            } else if (mode == 0) {
                 assert(1 <= e.u && e.u <= n1 && 1 <= e.v && e.v <= n2);
                 if (simple) assert(seen.insert({e.u, e.v}).second);
                 p[f(e.u - 1)] = f(n1 + e.v - 1);
@@ -290,7 +304,7 @@ int main() {
                 p[f(e.u - 1)] = f(e.v - 1);
             }
         }
-        if (mode != 0) {  // 2 彩色できる
+        if (mode == 1 || mode == 2) {  // 2 彩色できる
             std::vector<int> col(n, -1);
             for (ll s = 0; s < n; ++s) {
                 if (col[s] != -1) continue;
@@ -465,8 +479,11 @@ int main() {
                 ll lo = connected ? n - 1 : 0;
                 if (lo > mx) continue;
                 ll m = g.i(lo, mx);
-                auto es = g.graph(n, m, {.shape = sh, .connected = connected, .simple = simple});
+                bool ordered = g.coin();
+                auto es = g.graph(n, m, {.shape = sh, .connected = connected, .simple = simple, .ordered = ordered});
                 ll comps = check_edges(n, m, es, false, simple, connected);
+                if (ordered)
+                    for (auto& e : es) assert(e.u <= e.v && (simple ? e.u < e.v : true));
                 if (sh == GraphShape::pieces) assert(comps >= 2);
             }
     }

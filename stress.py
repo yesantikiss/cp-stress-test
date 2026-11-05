@@ -30,6 +30,7 @@ import json
 import math
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -381,8 +382,10 @@ def run_case(progs: Programs, case: Case, d: Path, opt: argparse.Namespace) -> V
         msg = (d / "stderr_checker.txt").read_text(errors="replace").strip()
         if c.status == "OK":
             return Verdict("OK", "", m.elapsed)
-        if c.status == "TLE" or c.code == 3:
-            return Verdict("CHECKER_FAIL", f"{c.status} ({describe_code(c.code)}) {msg}", m.elapsed)
+        if c.status == "TLE" or c.code != 1:
+            # 0 と 1 以外（3、ほかの値、例外やシグナルで落ちた、TL 超え）は checker 自身の失敗
+            what = f"checker exceeded {opt.checker_tl}s" if c.status == "TLE" else describe_code(c.code)
+            return Verdict("CHECKER_FAIL", f"{what} {msg}".strip(), m.elapsed)
         if msg.startswith("WA: "):
             msg = msg[4:]
         return Verdict("WA", msg or f"checker {describe_code(c.code)}", m.elapsed)
@@ -491,9 +494,9 @@ def run_interactive(progs: Programs, d: Path, opt: argparse.Namespace) -> Verdic
     for t in pumps:
         t.start()
 
-    # どちらが先に終わったかで判定が変わるので、終了を見つけた順番を記録する
+    # 両方が終わるまで待つ。片方が失敗で終わったら、もう片方は待たずに止める
     main_end = inter_end = None  # 何回目のポーリングで終了を見つけたか
-    main_killed = main_tle = inter_tle = False
+    main_killed = main_tle = inter_tle = inter_killed = False
     main_time = 0.0
     tick = 0
     while main_end is None or inter_end is None:
@@ -522,6 +525,7 @@ def run_interactive(progs: Programs, d: Path, opt: argparse.Namespace) -> Verdic
                 inter_end = tick
             elif main_end is not None and (main_tle or main.returncode != 0):
                 _kill(inter)  # main が落ちたら interactor は待たない
+                inter_killed = True
                 inter.wait()
                 inter_end = tick
         if main_end is None or inter_end is None:
@@ -534,19 +538,24 @@ def run_interactive(progs: Programs, d: Path, opt: argparse.Namespace) -> Verdic
     msg = (d / "stderr_interactor.txt").read_text(errors="replace").strip()
     last_msg = msg.splitlines()[-1] if msg else ""
     mc, ic = main.returncode, inter.returncode
+    # どちらが先に終わったかはポーリングの間隔しだいで入れ替わるので、判定には使わない。
+    # 代わりに interactor が書いた理由を見る: WA の理由が「main の出力が尽きた」なら main が先に終わった。
+    main_crashed = mc != 0 and not main_killed and not main_tle
+    inter_failed = inter_tle or (ic not in (0, 1) and not inter_killed)
+    by_main_end = ic == 1 and (("unexpected end of file" in last_msg and last_msg.startswith(("output ", "WA: output ")))
+                               or "main closed its input" in last_msg)
     if main_tle:
         hint = "  (main が応答していない。flush 忘れ？)" if log.last in ("<", "") else ""
         v = Verdict("TLE", f"main exceeded {opt.tl}s{hint}", main_time)
-    elif mc != 0 and not main_killed and main_end <= inter_end:
+    elif inter_failed:
+        what = f"interactor exceeded {opt.checker_tl}s" if inter_tle else f"{describe_code(ic)} {msg}".strip()
+        v = Verdict("INTERACTOR_FAIL", what, main_time)
+    elif ic == 1 and not (main_crashed and by_main_end):
+        v = Verdict("WA", last_msg[4:] if last_msg.startswith("WA: ") else last_msg or "interactor exit 1", main_time)
+    elif main_crashed:
         v = Verdict("RE", f"main: {describe_code(mc)}", main_time)
-    elif inter_tle:
-        v = Verdict("INTERACTOR_FAIL", f"interactor exceeded {opt.checker_tl}s", main_time)
     elif ic == 1:
         v = Verdict("WA", last_msg[4:] if last_msg.startswith("WA: ") else last_msg or "interactor exit 1", main_time)
-    elif ic != 0:
-        v = Verdict("INTERACTOR_FAIL", f"{describe_code(ic)} {msg}".strip(), main_time)
-    elif mc != 0:
-        v = Verdict("RE", f"main: {describe_code(mc)}", main_time)
     else:
         v = Verdict("OK", "", main_time)
     if main_tle:
@@ -598,9 +607,32 @@ def save_failure(workdir: Path, run_dir: Path, case: Case, v: Verdict, opt: argp
 
 
 def judge_flags(opt: argparse.Namespace) -> str:
+    """失敗時に表示する `st repro ...` に付けるオプション。既定値と違うものだけ付ける。"""
+    flags: list[str] = []
     if getattr(opt, "interactor", None):
-        return f" -i {opt.interactor}"
-    return f" -c {opt.checker}" if opt.checker else ""
+        flags += ["-i", opt.interactor]
+    elif opt.checker:
+        flags += ["-c", opt.checker]
+        if opt.ref:
+            flags.append("--ref")
+    for name, attr, default in (("--main", "main", "main.cpp"), ("--guchoku", "guchoku", "guchoku.cpp"),
+                                ("--gen-file", "gen_file", "gen.cpp"), ("--cmp", "cmp", "token"),
+                                ("--tl", "tl", 2.0), ("--ref-tl", "ref_tl", 10.0),
+                                ("--checker-tl", "checker_tl", 10.0), ("--gen-tl", "gen_tl", 10.0),
+                                ("--cxxflags", "cxxflags", os.environ.get("STRESS_CXXFLAGS", ""))):
+        value = getattr(opt, attr, default)
+        if value is None or value == default:
+            continue
+        if attr == "guchoku" and getattr(opt, "interactor", None):
+            continue  # インタラクティブでは愚直解を使わない
+        if attr == "guchoku" and opt.checker and not opt.ref:
+            continue
+        if attr == "cmp" and (opt.checker or getattr(opt, "interactor", None)):
+            continue
+        flags += [name, f"{value:g}" if isinstance(value, float) else str(value)]
+    if getattr(opt, "san", False):
+        flags.append("--san")
+    return "".join(" " + shlex.quote(f) for f in flags)
 
 
 def mode_name(opt: argparse.Namespace) -> str:
@@ -688,23 +720,34 @@ def copy_to_in(workdir: Path, src: Path) -> None:
 # ---------------------------------------------------------------- 最小化（サイズ縮小）
 
 
+TOOL_FAILURES = ("GEN_FAIL", "CHECKER_FAIL", "INTERACTOR_FAIL")  # 道具の側のバグ。解答の失敗としては扱わない
+
+
 def shrink(progs: Programs, case: Case, run_dir: Path, opt: argparse.Namespace,
-           deadline: float) -> tuple[Case, Verdict] | None:
-    """同じ生成器で cap を小さくして、失敗する入力を探し直す。"""
+           deadline: float) -> tuple[tuple[Case, Verdict] | None, list[tuple[Case, Verdict]]]:
+    """同じ生成器で cap を小さくして、失敗する入力を探し直す。
+
+    返り値は (見つかった失敗 or None, 途中で出た道具の側の失敗)。GEN_FAIL などは解答の失敗ではないので
+    採用せずに飛ばし、縮小を続ける（あとで警告として出す）。
+    """
     cap = case.cap or 1
     caps = sorted({c for c in [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 25, 32, 40, 50, 64, 80, 100] if c < cap}
                   | ({cap // 2, cap * 3 // 4} - {0, cap}))
     base = splitmix64(case.seed ^ 0x5EED)
+    tool_failures: list[tuple[Case, Verdict]] = []
     for c in caps:
         for t in range(opt.shrink_tries):
             if time.monotonic() > deadline:
-                return None
+                return None, tool_failures
             cand = Case(case_seed(base, c * 1_000_003 + t), c, case.name)
             Out.status(f"shrinking: cap={c} try {t + 1}/{opt.shrink_tries}")
             v = run_case(progs, cand, run_dir, opt)
+            if v.kind in TOOL_FAILURES:
+                tool_failures.append((cand, v))
+                continue
             if v.kind != "OK":
-                return cand, v
-    return None
+                return (cand, v), tool_failures
+    return None, tool_failures
 
 
 # ---------------------------------------------------------------- ビルドの準備
@@ -844,7 +887,7 @@ def cmd_run(opt: argparse.Namespace) -> int:
         if v.kind == "OK":
             continue
 
-        if v.kind in ("GEN_FAIL", "CHECKER_FAIL", "INTERACTOR_FAIL"):
+        if v.kind in TOOL_FAILURES:
             Out.log(Out.red(v.kind) + f"  {v.detail}")
             Out.log(Out.dim(f"case={case.id}"))
             return EXIT_ERROR
@@ -854,8 +897,13 @@ def cmd_run(opt: argparse.Namespace) -> int:
             if snapshot.exists():
                 shutil.rmtree(snapshot)
             shutil.copytree(run_dir, snapshot)
-            found = shrink(progs, case, run_dir, opt, time.monotonic() + opt.shrink_time)
+            found, tool_failures = shrink(progs, case, run_dir, opt, time.monotonic() + opt.shrink_time)
             Out.clear_status()
+            if tool_failures:
+                first_case, first_v = tool_failures[0]
+                Out.log(Out.yellow("warning: ") + f"縮小中に道具の側の失敗が {len(tool_failures)} 回出た（そのケースは飛ばした）")
+                Out.log(f"  {first_v.kind}  {first_v.detail}")
+                Out.log(Out.dim(f"  case={first_case.id}  ->  st repro {first_case.id}" + judge_flags(opt)))
             if found:
                 Out.log(Out.dim(f"shrunk: cap {case.cap} -> {found[0].cap}"))
                 case, v = found

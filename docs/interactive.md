@@ -202,11 +202,12 @@ bool yes = st.reply({true, false},
 | 状況 | 判定 |
 | --- | --- |
 | main が TL を超えた | TLE |
-| main が interactor より先に異常終了した | RE |
 | interactor が終了コード 3、落ちた、または TL を超えた | INTERACTOR_FAIL（そこで止める） |
-| interactor が WA を出した | WA（main はその時点で止める） |
-| interactor が AC のあと main が異常終了した | RE |
+| interactor が WA を出した。ただし理由が「main の出力が尽きた」で、main が異常終了している場合を除く | WA（main はその時点で止める） |
+| main が異常終了した | RE |
 | どちらも正常終了 | OK |
+
+どちらが先に終わったかは見ない。interactor が WA で終わると main の入力が閉じ、main がそれで落ちることがあり、終わった順番は実行ごとに入れ替わるため。代わりに interactor の理由を見る。理由が `output (token N): unexpected end of file` か `main closed its input` なら main の方が先に終わったので、main が異常終了していれば RE、正常に終わっていれば WA にする。
 
 - TL は main が起動してから終わるまでの実時間。interactor の待ち時間も含むので、本番より少し厳しい。
 - flush 忘れは互いに待ち合って TLE になる。最後に interactor が送ったあと main から何も来ていなければ「flush 忘れ？」と添える。`ios::sync_with_stdio(false); cin.tie(nullptr);` を入れたまま `'\n'` で出すと起きる。

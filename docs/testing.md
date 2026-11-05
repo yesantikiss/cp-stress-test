@@ -35,7 +35,7 @@ FAIL tle (exit 0, want 1)
 ```
 
 - C++ の単体テストは、失敗しても止まらずに最後まで回す。失敗した条件はテストごとに最初の 5 個まで、ファイル名と行番号と式で出る
-- `st` のテストは終了コードを比べる。失敗したら、そのコマンドの出力の最後の 20 行を出す
+- `st` のテストは終了コードを比べる。失敗を保存するものは、保存した meta.json の判定の種類（WA / RE / TLE など）も比べる（`<名前>_kind` の行）。失敗したら、そのコマンドの出力の最後の 20 行を出す
 
 ## テストの一覧
 
@@ -102,10 +102,14 @@ random の形は範囲などの共通の条件だけを見る。
 
 ### st のテスト
 
-`tests/sample`、`tests/multi`、`tests/interactive` に、正しい解とわざと間違えた解（WA / RE / TLE、flush 忘れ、クエリ回数超過、余分な出力など）を置き、`st` の終了コードと保存されるファイルを確かめる。
+`tests/sample`、`tests/multi`、`tests/interactive`、`tests/shrink` に、正しい解とわざと間違えた解（WA / RE / TLE、flush 忘れ、クエリ回数超過、余分な出力など）や、わざと壊した愚直解、gen、checker を置き、`st` の終了コード、判定の種類、保存されるファイルを確かめる。
 
-- 判定: OK / WA / RE / TLE、checker（`-c`、`--ref`）、interactor（`-i`、適応的な interactor）
-- 再現: `st repro` で同じ入力が出る
+- 判定: OK / WA / RE / TLE / REF_RE / REF_TLE、checker（`-c`、`--ref`）、interactor（`-i`、適応的な interactor）
+- 道具の側の失敗: gen error は GEN_FAIL、checker が例外で落ちたら CHECKER_FAIL で、どちらも終了コード 2
+- 比較方法: `--cmp exact`、`--cmp float:EPS`（誤差の内と外）、token で小数がずれたら WA
+- インタラクティブ: interactor の WA の直後に main が落ちても、10 回とも WA になる
+- 縮小: 縮小中に gen error が出ても本物の WA を残し、警告を出す
+- 再現: `st repro` で同じ入力が出る。失敗時に表示された `st repro ...` に `--main` `--cmp` `--tl` が付き、そのまま打てば再現する
 - in.txt: 失敗時の書き出し、手書きの in.txt の退避、`--no-to-in`、`st restore`
 - 生成器: `-g` での選択、STRESS_BIG の回数、`st make`、`st bench`、タグの表示
 - `examples/adaptive/` と `examples/checker/` の例が、そのまま OK で通る

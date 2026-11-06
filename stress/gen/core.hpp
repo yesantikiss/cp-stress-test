@@ -44,7 +44,8 @@ struct DecimalOpt {
 
 class Core {
   public:
-    // true なら tree / graph / perm の頂点番号を 1 始まりにする。
+    // true なら tree / parents / graph / digraph / dag / bipartite / perm の番号を 1 始まり、false なら 0 始まりにする。
+    // 関数を呼んだときに読むので、途中で代入するとそれ以降の呼び出しだけが変わる。
     bool one_indexed = true;
 
     explicit Core(std::uint64_t seed, ll cap = std::numeric_limits<ll>::max())

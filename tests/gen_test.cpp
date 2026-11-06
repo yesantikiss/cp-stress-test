@@ -534,6 +534,79 @@ static void test_tree_options() {
     }
 }
 
+// one_indexed = false なら、同じ seed で 1 始まりのときの番号からちょうど 1 引いたものになる
+static void test_one_indexed() {
+    auto shifted = [](const Edges& a, const Edges& b) {
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i)
+            if (a[i].u != b[i].u + 1 || a[i].v != b[i].v + 1 || a[i].w != b[i].w) return false;
+        return true;
+    };
+    auto shifted_vec = [](const std::vector<ll>& a, const std::vector<ll>& b) {
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i)
+            if (a[i] != b[i] + 1) return false;
+        return true;
+    };
+    // f(g) を 1 始まりと 0 始まりで同じ seed から呼ぶ
+    auto both = [](std::uint64_t seed, auto f) {
+        Gen one(seed), zero(seed);
+        zero.one_indexed = false;
+        return std::pair{f(one), f(zero)};
+    };
+    Gen r(30);
+    for (int k = 0; k < 200; ++k) {
+        const ll n = r.i(2, 12), m = r.i(n - 1, n * (n - 1) / 2);
+        const ll n1 = r.i(1, 6), n2 = r.i(1, 6), mb = r.i(0, n1 * n2);
+        const ll half = (n / 2) * (n - n / 2);
+        const std::uint64_t s = 1000 + k;
+        auto [t1, t0] = both(s, [&](Gen& g) { return g.tree(n, {.w = Range{1, 9}}); });
+        CHECK(shifted(t1, t0) && is_tree(n, t0, 0));
+        auto [o1, o0] = both(s, [&](Gen& g) { return g.tree(n, {.ordered = true}); });
+        CHECK(shifted(o1, o0));
+        auto [p1, p0] = both(s, [&](Gen& g) { return g.parents(n); });
+        CHECK(shifted_vec(p1, p0));
+        auto [q1, q0] = both(s, [&](Gen& g) { return g.parents(n, {.ordered = false}); });
+        CHECK(shifted_vec(q1, q0));  // 根の親も 0 から -1 になる
+        auto [g1, g0] = both(s, [&](Gen& g) { return g.graph(n, m, {.connected = true}); });
+        CHECK(shifted(g1, g0));
+        auto [d1, d0] = both(s, [&](Gen& g) { return g.digraph(n, m); });
+        CHECK(shifted(d1, d0));
+        auto [dr1, dr0] = both(s, [&](Gen& g) { return g.digraph(n, m, {.reach = Reach::root}); });
+        CHECK(shifted(dr1, dr0));
+        auto [ds1, ds0] = both(s, [&](Gen& g) { return g.digraph(n, std::max(m, n), {.reach = Reach::strong}); });
+        CHECK(shifted(ds1, ds0));
+        auto [a1, a0] = both(s, [&](Gen& g) { return g.dag(n, m); });
+        CHECK(shifted(a1, a0));
+        auto [b1, b0] = both(s, [&](Gen& g) { return g.bipartite(n1, n2, mb); });
+        CHECK(shifted(b1, b0));
+        auto [bo1, bo0] = both(s, [&](Gen& g) { return g.bipartite(n1, n2, mb, {.label = BipartiteLabel::offset}); });
+        CHECK(shifted(bo1, bo0));
+        auto [bm1, bm0] = both(s, [&](Gen& g) { return g.bipartite(n, std::min(m, half)); });
+        CHECK(shifted(bm1, bm0));
+        auto [v1, v0] = both(s, [&](Gen& g) { return g.perm(n); });
+        CHECK(shifted_vec(v1, v0));
+        // 範囲も直接見る
+        for (auto* es : {&t0, &g0, &d0, &dr0, &ds0, &a0, &bm0})
+            for (auto& e : *es) CHECK(0 <= std::min(e.u, e.v) && std::max(e.u, e.v) < n);
+        for (auto& e : b0) CHECK(0 <= e.u && e.u < n1 && 0 <= e.v && e.v < n2);
+        for (auto& e : bo0) CHECK(0 <= e.u && e.u < n1 && n1 <= e.v && e.v < n1 + n2);
+    }
+    // 途中で切り替えると、それ以降の呼び出しだけ変わる（前に作ったものはそのまま）
+    {
+        Gen g(31);
+        auto before = g.perm(5);
+        g.one_indexed = false;
+        auto after = g.perm(5);
+        g.one_indexed = true;
+        auto again = g.perm(5);
+        auto sorted = [](std::vector<ll> v) { std::sort(v.begin(), v.end()); return v; };
+        CHECK(sorted(before) == std::vector<ll>({1, 2, 3, 4, 5}));
+        CHECK(sorted(after) == std::vector<ll>({0, 1, 2, 3, 4}));
+        CHECK(sorted(again) == std::vector<ll>({1, 2, 3, 4, 5}));
+    }
+}
+
 // 根付き木の親の列
 static void test_parents() {
     Gen g(8);
@@ -1118,6 +1191,7 @@ int main(int argc, char** argv) {
                                   {"tree_options", test_tree_options},
                                   {"parents", test_parents},
                                   {"parents_mixed", test_parents_mixed},
+                                  {"one_indexed", test_one_indexed},
                                   {"graph_basic", test_graph_basic},
                                   {"graph_shapes", test_graph_shapes},
                                   {"graph_mixed", test_graph_mixed},

@@ -94,7 +94,7 @@ copied failing input -> in.txt
 | TLE | main が `--tl` を超えた | する |
 | REF_RE / REF_TLE | 愚直解が落ちた / `--ref-tl` を超えた | する |
 | GEN_FAIL | gen が落ちた / `--gen-tl` を超えた | しない |
-| CHECKER_FAIL / INTERACTOR_FAIL | checker / interactor が終了コード 3 で終わった、TL を超えた（interactor は落ちたときも） | しない |
+| CHECKER_FAIL / INTERACTOR_FAIL | checker が 0 と 1 以外で終わった（3、その他の値、例外やシグナル）、interactor が終了コード 3 で終わった、落ちた、どちらかが TL を超えた | しない |
 
 保存しない 3 つは道具の側のバグなので、縮小せずにその場で止まり、終了コード 2 を返す。
 
@@ -115,6 +115,7 @@ copied failing input -> in.txt
 - cap 1 つにつき `--shrink-tries` 回（既定 200）、別の seed で試す。最初に失敗したものを残す。
 - 全体で `--shrink-time` 秒（既定 20）を超えたら打ち切り、元の失敗を残す。
 - 縮小で見つかった失敗は判定の種類が元と違うこともある（WA で見つけて、小さい cap では RE など）。
+- 縮小中に GEN_FAIL、CHECKER_FAIL、INTERACTOR_FAIL が出たら、そのケースは採用せずに飛ばして縮小を続ける。終わったあとに `warning: 縮小中に道具の側の失敗が 3 回出た` のように回数と、最初のものの理由とケース ID を出す。cap 1 つにつき 200 回試すので、本体のループでは出なかった gen や checker のまれなバグがここで見つかることがある。
 
 `--no-shrink` で縮小しない。
 
@@ -138,7 +139,7 @@ st repro SEED:CAP:NAME [run と同じオプション]
 
 - 失敗時の `case=...` をそのまま渡す。CAP を `-` にすると上限なし、NAME を省略すると先頭の生成器を使う。
 - 再現すれば失敗として保存し、表示する（終了コード 1）。再現しなければ `OK ... (再現しなかった)` と入力の場所を出す（終了コード 0）。
-- 失敗時に表示される `st repro ...` には `-c` / `-i` だけが付く。`--main`、`--ref`、`--cmp`、`--tl` などを付けて回していたときは、同じものを自分で付ける。
+- 失敗時に表示される `st repro ...` には、そのとき使ったオプションのうち既定値と違うものが付く（`-c` / `-i`、`--ref`、`--main`、`--guchoku`、`--gen-file`、`--cmp`、`--tl`、`--ref-tl`、`--checker-tl`、`--gen-tl`、`--san`、`--cxxflags`）。なのでそのまま打てば同じ条件で再現する。
 - `st repro -c SEED:CAP:NAME` のように `-c` / `-i` の直後にケースを書くと、argparse の上ではケースが SRC として読まれる。この形（数字で始まり `:` で区切ったもの）は st がケースとして扱い直し、SRC は既定の checker.cpp / interactor.cpp にする。
 
 ## st make

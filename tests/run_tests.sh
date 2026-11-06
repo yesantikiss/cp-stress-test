@@ -12,6 +12,15 @@ check() {  # check <name> <expected exit> <command...>
     local got=$?
     if [ "$got" -eq "$want" ]; then echo "ok   $name"; else echo "FAIL $name (exit $got, want $want)"; tail -20 "$build_dir/$name.log"; fail=1; fi
 }
+kind_is() {  # kind_is <check の名前> <判定>: その check が保存した失敗（ログの saved: の行）の meta.json の kind
+    local dir got=""
+    dir="$(sed -n 's/^saved: //p' "$build_dir/$1.log" | tail -1)"
+    [ -n "$dir" ] && got="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]+"/meta.json"))["kind"])' "$dir" 2>/dev/null)"
+    if [ "$got" = "$2" ]; then echo "ok   $1_kind"; else echo "FAIL $1_kind (kind '$got', want '$2')"; fail=1; fi
+}
+log_has() {  # log_has <名前> <check の名前> <grep -E のパターン>
+    if grep -qE "$3" "$build_dir/$2.log"; then echo "ok   $1"; else echo "FAIL $1 (no /$3/ in $2.log)"; tail -20 "$build_dir/$2.log"; fail=1; fi
+}
 
 # C++ の単体テスト。テストごとの ok / FAIL をそのまま出す（行頭に "gen_test: " を付ける）
 for t in gen_test adaptive_test; do
@@ -29,14 +38,46 @@ rm -rf "$work" && cp -r "$root/tests/sample" "$work" && cd "$work"
 st() { python3 "$root/stress.py" "$@"; }
 check ok          0 st --main main_ok.cpp -n 300 --seed 1
 check wa          1 st --main main_wa.cpp --seed 1
+kind_is wa WA
 check re          1 st --main main_re.cpp --seed 2
+kind_is re RE
 check tle         1 st --main main_tle.cpp --seed 3 --tl 1
+kind_is tle TLE
 check checker_ok  0 st -c checker.cpp --main main_ok.cpp -n 300 --seed 5
 check checker_wa  1 st -c checker.cpp --main main_wa.cpp --seed 5
+kind_is checker_wa WA
 check checker_ref 0 st -c checker.cpp --ref --main main_ok.cpp -n 100 --seed 5
 check checker_default_ok 0 st -c --main main_ok.cpp -n 100 --seed 5
 check checker_default_wa 1 st --main main_wa.cpp --seed 5 -c
 check checker_default_ref 0 st -c --ref --main main_ok.cpp -n 100 --seed 5
+
+# 愚直解の失敗、道具の側の失敗（終了コード 2 で、保存しない）
+check ref_re      1 st --main main_ok.cpp --guchoku guchoku_re.cpp --seed 1
+kind_is ref_re REF_RE
+check ref_tle     1 st --main main_ok.cpp --guchoku guchoku_tle.cpp --ref-tl 0.5 --seed 1
+kind_is ref_tle REF_TLE
+check gen_fail    2 st --main main_ok.cpp --gen-file gen_bad.cpp --seed 1
+log_has gen_fail_msg gen_fail '^GEN_FAIL .*distinct'
+# checker が例外で落ちたら main の WA ではなく CHECKER_FAIL
+check checker_crash 2 st -c checker_crash.cpp --main main_ok.cpp --seed 1
+log_has checker_crash_msg checker_crash '^CHECKER_FAIL .*signal SIGABRT'
+
+# 比較方法。main_ok は行末に空白を出すので exact では違い、main_float は 1e-7 ずれた小数を出す
+check cmp_exact   1 st --main main_ok.cpp --cmp exact --seed 1
+kind_is cmp_exact WA
+check cmp_float_ok 0 st --main main_float.cpp --cmp float:1e-6 -n 200 --seed 1
+check cmp_float_wa 1 st --main main_float.cpp --cmp float:1e-12 --seed 1
+kind_is cmp_float_wa WA
+check cmp_token_float 1 st --main main_float.cpp --seed 1
+
+# 表示された st repro をそのまま打てば再現する（--main / --cmp / --tl も付く）
+st --main main_ok.cpp --cmp exact --tl 1.5 --seed 1 >/dev/null 2>&1
+repro_cmd="$(python3 -c 'import json;print(json.load(open(".stress/last/meta.json"))["repro"])')"
+case "$repro_cmd" in
+    *"--main main_ok.cpp"*"--cmp exact"*"--tl 1.5"*) echo "ok   repro_cmd_flags" ;;
+    *) echo "FAIL repro_cmd_flags ($repro_cmd)"; fail=1 ;;
+esac
+check repro_cmd_reproduces 1 st ${repro_cmd#st }
 
 # repro: 直前の失敗の seed:cap で同じ入力が出る
 st --main main_wa.cpp --seed 7 >/dev/null 2>&1
@@ -64,6 +105,14 @@ check restore 0 st restore
 printf 'edited again\n' > in.txt
 check restore_refuse 2 st restore
 check restore_force  0 st restore --force
+
+# 縮小中に gen error が出ても、そのケースは飛ばして本物の WA を残し、警告を出す
+work_s="$build_dir/shrink"
+rm -rf "$work_s" && cp -r "$root/tests/shrink" "$work_s" && cd "$work_s"
+check shrink_skips_gen_fail 1 st --seed 1
+kind_is shrink_skips_gen_fail WA
+log_has shrink_gen_fail_warning shrink_skips_gen_fail '^warning: .*GEN_FAIL|^  GEN_FAIL'
+[ "$(head -1 in.txt)" -ge 6 ] 2>/dev/null && echo "ok   shrink_in_txt_is_real_failure" || { echo "FAIL shrink_in_txt_is_real_failure"; fail=1; }
 
 # 名前付き生成器、make、bench
 work2="$build_dir/multi"
@@ -98,7 +147,14 @@ grep -q 'query limit exceeded' .stress/last/meta.json && echo "ok   inter_limit_
 check inter_noflush 1 st -i interactor.cpp --main main_noflush.cpp --seed 1 --tl 0.5 --no-shrink
 grep -q '"kind": "TLE"' .stress/last/meta.json && echo "ok   inter_noflush_tle" || { echo "FAIL inter_noflush_tle"; fail=1; }
 check inter_re      1 st -i interactor.cpp --main main_re.cpp --seed 1
-grep -q '"kind": "RE"' .stress/last/meta.json && echo "ok   inter_re_kind" || { echo "FAIL inter_re_kind"; fail=1; }
+kind_is inter_re RE
+# interactor の WA の直後に main が落ちても、終わった順番によらず WA（10 回とも）
+badq_ok=1
+for k in $(seq 1 10); do
+    st repro 5:1:gen -i interactor.cpp --main main_badquery.cpp --no-to-in >"$build_dir/inter_badquery.log" 2>&1
+    grep -q '^WA  y is out of range' "$build_dir/inter_badquery.log" || badq_ok=0
+done
+[ "$badq_ok" -eq 1 ] && echo "ok   inter_wa_then_crash_is_wa" || { echo "FAIL inter_wa_then_crash_is_wa"; tail -20 "$build_dir/inter_badquery.log"; fail=1; }
 check inter_extra   1 st -i interactor.cpp --main main_extra.cpp --seed 1
 check inter_repro   1 st repro "$(python3 -c 'import json;print(json.load(open(".stress/last/meta.json"))["case"])')" -i interactor.cpp --main main_extra.cpp
 check inter_with_c  2 st -i interactor.cpp -c checker.cpp --main main_ok.cpp

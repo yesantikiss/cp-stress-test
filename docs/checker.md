@@ -51,10 +51,10 @@ st の判定はこうなる。
 | checker の終わり方 | st の判定 |
 | --- | --- |
 | 終了コード 0 | OK |
-| 終了コード 3、または checker の TL（`--checker-tl`、既定 10 秒）を超えた | CHECKER_FAIL。保存せずにそこで止め、終了コード 2 |
-| それ以外（終了コード 1、その他の値、シグナルで落ちた） | WA。stderr の内容を理由として表示する（先頭の `WA: ` は取る） |
+| 終了コード 1 | WA。stderr の内容を理由として表示する（先頭の `WA: ` は取る） |
+| それ以外（終了コード 3、その他の値、例外やシグナルで落ちた、checker の TL（`--checker-tl`、既定 10 秒）を超えた） | CHECKER_FAIL。保存せずにそこで止め、終了コード 2 |
 
-checker がバグで落ちたときも WA に見えるので、「WA の理由が変」なときは stderr_checker.txt を確かめる。
+checker がバグで落ちたとき（`assert`、範囲外の `at()`、セグフォなど）は main の WA ではなく CHECKER_FAIL になり、checker の stderr が表示される。
 
 main が RE や TLE になったときは checker を呼ばない。`--ref` のときは愚直解の RE / TLE（REF_RE / REF_TLE）も先に判定する。
 
@@ -194,7 +194,7 @@ void judge(Judge& j) {
 
 ## judge.hpp を使わない checker
 
-`./checker in out` の形で動き、AC なら終了コード 0 を返す checker なら、judge.hpp を使っていなくてもそのまま `-c` に渡せる。`--ref` を付けると 3 番目の引数も渡る。上の[表](#呼ばれ方と終了コード)のとおり、終了コード 3 は checker の失敗、それ以外の 0 でない値は WA として扱う。
+`./checker in out` の形で動き、AC なら終了コード 0 を返す checker なら、judge.hpp を使っていなくてもそのまま `-c` に渡せる。`--ref` を付けると 3 番目の引数も渡る。上の[表](#呼ばれ方と終了コード)のとおり、終了コード 1 だけを WA として扱い、0 と 1 以外は checker の失敗にする。WA を 2 など別の値で返す checker は、1 を返すように直す。
 
 ## main を自分で書く
 

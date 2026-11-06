@@ -58,6 +58,7 @@ FAIL tle (exit 0, want 1)
 | `seq_shapes` / `seq_mixed` | 形ごとの性質（下の表）。mixed はタグの形と中身が合うか |
 | `tree_shapes` / `tree_mixed` / `parents` / `parents_mixed` | 木になっている、形ごとの性質、`.ordered`、0 始まり |
 | `tree_options` | `.w`、`.ordered`、`one_indexed = false` |
+| `one_indexed` | 0 始まりにすると、全関数で同じ seed の 1 始まりの番号からちょうど 1 引いたものになる。途中で切り替えるとそれ以降だけ変わる |
 | `graph_basic` / `graph_shapes` / `graph_mixed` | 本数、範囲、単純性、連結性、`.ordered`、形ごとの性質 |
 | `digraph_shapes` / `digraph_strong_shapes` / `digraph_mixed` | 上に加えて `.reach`（weak / root / strong を到達できる頂点数で確認） |
 | `graph_big` | 大きいグラフや密なグラフでも終わる |

@@ -38,7 +38,7 @@ STRESS_BIG(max) {                  // 最大ケース。st では使わず、st 
 | [出力](#出力) | `out(...)` `out(edges)` `out_lines(v)` `raw(s)` |
 | [タグ](#タグ) | `tag("name")`（失敗時に表示される） |
 
-重み `.w` は `Range{l, r}` か、値を返すラムダ。頂点番号は既定で 1 始まり（`g.one_indexed = false` で 0 始まり）。
+重み `.w` は `Range{l, r}` か、値を返すラムダ。頂点番号は既定で 1 始まり（メンバ変数 `g.one_indexed = false;` で 0 始まり。[頂点番号](#頂点番号)を参照）。
 
 以下、それぞれの関数を詳しく説明する。
 
@@ -422,7 +422,34 @@ for (auto e : g.tree(n)) g.out(e.u, e.v, g.choice("abc"));  // "u v c" を n-1 �
 
 ## 頂点番号
 
-`g.one_indexed` が `true`（既定）なら `tree` / `parents` / `graph` / `digraph` / `dag` / `bipartite` / `perm` は 1 始まり、`false` なら 0 始まりになる。生成器の最初で `g.one_indexed = false;` と書けばその生成器の中で全部 0 始まりになる。
+頂点番号は既定で 1 始まり。0 始まりにしたいときは `g.one_indexed` に `false` を代入する。`g.one_indexed` は関数でも `{...}` のオプションでもなく、`g` のメンバ変数（`bool`）。
+
+```cpp
+STRESS_GEN(zero) {
+    g.one_indexed = false;  // ここから下で作る木や順列は 0 始まり
+    ll n = g.i(2, 10);
+    g.out(n);
+    g.out(g.tree(n));
+}
+```
+
+`g.one_indexed(false)` や `g.tree(n, {.one_indexed = false})` と書くとコンパイルエラーになる。
+
+| 関数 | `true`（既定） | `false` |
+| --- | --- | --- |
+| `tree` / `graph` / `digraph` / `dag` | 1..n | 0..n-1 |
+| `bipartite(n, m)` と `.label = merged` | 1..n | 0..n-1 |
+| `bipartite(n1, n2, m)`（separate） | 左 1..n1、右 1..n2 | 左 0..n1-1、右 0..n2-1 |
+| `bipartite` の `.label = offset` | 左 1..n1、右 n1+1..n1+n2 | 左 0..n1-1、右 n1..n1+n2-1 |
+| `parents` | 親は 1..n-1 | 親は 0..n-2 |
+| `parents` の `.ordered = false` | 1..n、根の親は 0 | 0..n-1、根の親は -1 |
+| `perm` | 1..n | 0..n-1 |
+| `digraph` / `dag` の `Reach::root` の根 | 頂点 1 | 頂点 0 |
+
+- 番号以外は変わらない。同じ seed なら、`false` のときの出力は `true` のときの番号からちょうど 1 引いたものになる。
+- `g.i` / `g.vec` / `g.seq` などの値の範囲には効かない。範囲は自分で書いたとおりになる。
+- `one_indexed` は関数を呼んだときに読まれる。途中で代入すると、それより後の呼び出しだけが変わり、すでに作った辺や順列はそのまま。1 つの生成器の中で 1 始まりと 0 始まりを混ぜることもできる。
+- 1 ケースごとに `g` を作り直すので、ある生成器で `false` にしても、ほかの生成器や次のケースは既定の `true` から始まる。
 
 ## 文字列
 

@@ -89,3 +89,7 @@ bash tests/run_tests.sh
 ```
 
 何を確かめているかは [docs/testing.md](docs/testing.md)。
+
+## ライセンス
+
+[CC0 1.0](LICENSE)。著作権を放棄しているので、改変や再配布も含めて断りなく自由に使ってよい。

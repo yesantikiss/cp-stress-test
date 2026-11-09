@@ -1,6 +1,6 @@
 # gen.cpp
 
-`stress/gen.hpp` を include して生成器を書く。中身は `stress/gen/` に分かれている: `core.hpp`（乱数）、`array.hpp`、`graph.hpp`（木とグラフ）、`string.hpp`、`output.hpp`。gen.cpp からは `stress/gen.hpp` だけ include すればいい。
+`stress/gen.hpp` を include して生成器を書く。中身は `stress/gen/` に分かれている: `core.hpp`（乱数）、`array.hpp`、`graph.hpp`（木とグラフ）、`string.hpp`、`big.hpp`（巨大整数）、`number.hpp`（素数と高度合成数）、`output.hpp`。gen.cpp からは `stress/gen.hpp` だけ include すればいい。
 
 ```cpp
 #include "stress/gen.hpp"
@@ -35,6 +35,7 @@ STRESS_BIG(max) {                  // 最大ケース。st では使わず、st 
 | [グラフ](#グラフ) | `graph(n, m, {...})` `digraph(n, m, {...})` `dag(n, m, {...})` `bipartite(n1, n2, m, {...})` |
 | [文字列](#文字列) | `str(n, "ab", {...})` `mutate(s, k)` `strs(k, total, "ab", {...})` `grid(h, w, ".#")` |
 | [巨大整数](#巨大整数) | `big(len, {...})` `big_range("1", "1e100", {...})`（文字列で返す） |
+| [素数と高度合成数](#素数と高度合成数) | `prime(l, r)` `highly_composite(r)` `highly_composite(l, r)` |
 | [出力](#出力) | `out(...)` `out(edges)` `out_lines(v)` `raw(s)` |
 | [タグ](#タグ) | `tag("name")`（失敗時に表示される） |
 
@@ -547,6 +548,29 @@ auto s = g.big_range("1", "1e18", {.digits = digits::hex});      // 範囲は 10
 | `digits::base36` | `0123456789abcdefghijklmnopqrstuvwxyz` |
 
 ほかの並びも文字列で直接渡せる（`{.digits = "0123456789ABCDEFGHIJ"}` で 20 進など）。2 文字以上必要。
+
+## 素数と高度合成数
+
+```cpp
+ll p = g.prime(1, 1000000000);                  // 10^9 以下のランダムな素数
+auto v = g.highly_composite(1000000000000000000LL);
+ll x = g.choice(v);                             // 10^18 以下の高度合成数をランダムに 1 個
+ll w = v.back();                                // 10^18 以下で約数が最も多い数（約数 103680 個）
+```
+
+| 関数 | 返すもの |
+| --- | --- |
+| `g.prime(lo, hi)` | 閉区間 `[lo, hi]` の素数を 1 個 |
+| `g.highly_composite(hi)` | `hi` 以下の高度合成数を小さい順に全部（`std::vector<ll>`） |
+| `g.highly_composite(lo, hi)` | 閉区間 `[lo, hi]` の高度合成数を小さい順に全部 |
+
+高度合成数は、それより小さいどの正の整数よりも約数が多い数（1, 2, 4, 6, 12, 24, 36, 48, 60, 120, ...）。`hi` 以下で約数が最も多い数は、`hi` 以下で最大の高度合成数になる。約数を列挙する解の最悪ケースを作りたいときに使う。
+
+- `prime`: 1/8 の確率で範囲内の最小か最大の素数を返す。それ以外は値 x を一様に選び、x 以上で最初の素数（範囲内に無ければ x 以下で最後の素数）を返す。なので素数の間で一様ではなく、直前の間隔が広い素数ほど出やすい。
+- `prime`: 判定は 64 bit で正しいミラーラビン。範囲は `long long` 全体で使える（`lo` が 2 未満なら 2 からとして扱う）。`long long` の範囲では素数の間隔は 2000 未満なので、1 回の呼び出しは十分速い。範囲に素数が無いと（`lo > hi` も）エラー。
+- `highly_composite`: 値は乱数で変わらない。ランダムに選ぶなら `g.choice`、最悪ケースなら `.back()` を使う。
+- `highly_composite`: `long long` に収まる高度合成数を初回の呼び出しで全部求めて使い回す（10^18 以下で 156 個）。範囲に 1 個も無いと（`lo > hi` も）エラー。
+- 普段のランテスでは cap が小さいので、1, 2, 4, 6, 12 くらいは `g.i` でもよく出る。主な使いどころは `STRESS_BIG` で作る最大ケース（`st bench`）。
 
 ## 出力
 

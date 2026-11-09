@@ -67,6 +67,8 @@ FAIL tle (exit 0, want 1)
 | `weights` | `.w` を付けないと重みなし。Range なら範囲内、ラムダなら辺 1 本につき 1 回呼ぶ |
 | `str_shapes` / `str_mixed` / `str_others` | 長さ、文字種、形ごとの性質、`strs` / `mutate` / `grid` |
 | `big` / `big_conversion` | 桁数、先頭の 0、範囲、進数の変換、`2^60-1` などの書き方 |
+| `prime` | 素数判定を 10^6 までのふるいと比べる。大きい素数と強擬素数、範囲内の素数が端も含めて全部出る、上に無いときは下を探す、`long long` の上端 |
+| `highly_composite` | 10^6 までは約数の個数を数えた結果と一致、10^18 以下で 156 個、最大が 897612484786617600、`long long` 全体で約数の個数が増え続ける |
 | `output` / `tags` | `g.out` の書式、タグの付き方 |
 | `gen_errors` | 矛盾した指定が gen error（終了コード 3）になる |
 

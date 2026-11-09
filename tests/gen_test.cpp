@@ -1119,6 +1119,85 @@ static void test_tags() {  // mixed で選ばれた形と、g.tag で付けた�
 
 // ---------- 矛盾した指定は gen error（終了コード 3） ----------
 
+static void test_prime() {
+    // is_prime を 10^6 までのふるいと比べる
+    const ll N = 1000000;
+    std::vector<char> sieve(N + 1, 1);
+    sieve[0] = sieve[1] = 0;
+    for (ll i = 2; i * i <= N; ++i)
+        if (sieve[i])
+            for (ll j = i * i; j <= N; j += i) sieve[j] = 0;
+    ll bad = 0;
+    for (ll x = -5; x <= N; ++x) bad += detail::is_prime(x) != (x >= 0 && sieve[x]);
+    CHECK(bad == 0);
+    // 大きい素数と、小さい底をすり抜ける合成数
+    for (ll p : {998244353LL, 1000000007LL, 1000000000000000003LL, (1LL << 61) - 1, LLONG_MAX - 24})
+        CHECK(detail::is_prime(p));
+    for (ll c : {3215031751LL, 3825123056546413051LL, 1000000007LL * 998244353LL, LLONG_MAX, (1LL << 62)})
+        CHECK(!detail::is_prime(c));
+
+    // 範囲内の素数で、1/8 の端（最小と最大）も含めて全部出る
+    std::map<ll, ll> cnt;
+    for (std::uint64_t seed = 1; seed <= 3000; ++seed) {
+        Gen g(seed);
+        ll p = g.prime(100, 200);
+        CHECK(100 <= p && p <= 200 && sieve[p]);
+        ++cnt[p];
+    }
+    ll primes_in = 0;
+    for (ll x = 100; x <= 200; ++x) primes_in += sieve[x];
+    CHECK((ll)cnt.size() == primes_in);
+    CHECK(cnt.count(101) && cnt.count(199));
+
+    for (std::uint64_t seed = 1; seed <= 200; ++seed) {
+        Gen g(seed);
+        CHECK(g.prime(2, 2) == 2);
+        CHECK(g.prime(-10, 2) == 2);
+        CHECK(g.prime(24, 29) == 29);  // x が 24..28 なら上へ、29 ならそのまま
+        CHECK(g.prime(23, 28) == 23);  // 上に無いときは下へ
+        ll big = g.prime(1000000000000000000LL, LLONG_MAX);
+        CHECK(big >= 1000000000000000000LL && detail::is_prime(big));
+        CHECK(g.prime(LLONG_MAX - 100, LLONG_MAX) == LLONG_MAX - 24);  // 2^63 - 25 が long long で最大の素数
+    }
+}
+
+static void test_highly_composite() {
+    // 10^6 までは約数の個数を全部数えて、記録を更新する数と比べる
+    const ll N = 1000000;
+    std::vector<ll> d(N + 1, 0);
+    for (ll i = 1; i <= N; ++i)
+        for (ll j = i; j <= N; j += i) ++d[j];
+    std::vector<ll> want;
+    ll best = 0;
+    for (ll x = 1; x <= N; ++x)
+        if (d[x] > best) best = d[x], want.push_back(x);
+    Gen g(1);
+    CHECK(g.highly_composite(N) == want);
+    CHECK(g.highly_composite(12) == (std::vector<ll>{1, 2, 4, 6, 12}));
+    CHECK(g.highly_composite(1) == (std::vector<ll>{1}));
+    CHECK(g.highly_composite(13, 60) == (std::vector<ll>{24, 36, 48, 60}));
+    CHECK(g.highly_composite(24, 24) == (std::vector<ll>{24}));
+
+    // 10^18 以下は 156 個で、最大は 897612484786617600（約数 103680 個）
+    auto v = g.highly_composite(1000000000000000000LL);
+    CHECK(v.size() == 156);
+    CHECK(v.back() == 897612484786617600LL);
+    // 約数の個数（素因数は 53 以下だけ）が狭義単調増加
+    auto divs = [](ll x) {
+        ll r = 1;
+        for (ll p : {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53}) {
+            ll e = 0;
+            while (x % p == 0) x /= p, ++e;
+            r *= e + 1;
+        }
+        return x == 1 ? r : -1;
+    };
+    CHECK(divs(v.back()) == 103680);
+    auto all = g.highly_composite(LLONG_MAX);
+    CHECK(std::is_sorted(all.begin(), all.end()));
+    for (std::size_t k = 1; k < all.size(); ++k) CHECK_OR(divs(all[k - 1]) < divs(all[k]) && divs(all[k - 1]) > 0, break);
+}
+
 static void test_gen_errors() {
     auto dies = [](auto f) { return dies_with_gen_error([f] { Gen g(1); f(g); }); };
     // 判定そのものの確認: 正しい指定では止まらない
@@ -1173,6 +1252,13 @@ static void test_gen_errors() {
     CHECK(dies([](Gen& g) { g.big(3, {.digits = "0"}); }));
     CHECK(dies([](Gen& g) { g.big_range("10", "9"); }));
     CHECK(dies([](Gen& g) { g.big_range("1+1", "9"); }));
+    CHECK(dies([](Gen& g) { g.prime(3, 2); }));
+    CHECK(dies([](Gen& g) { g.prime(1, 1); }));
+    CHECK(dies([](Gen& g) { g.prime(24, 28); }));
+    CHECK(dies([](Gen& g) { g.prime(LLONG_MAX - 10, LLONG_MAX); }));
+    CHECK(dies([](Gen& g) { g.highly_composite(0); }));
+    CHECK(dies([](Gen& g) { g.highly_composite(5, 3); }));
+    CHECK(dies([](Gen& g) { g.highly_composite(13, 23); }));
 }
 
 int main(int argc, char** argv) {
@@ -1207,6 +1293,8 @@ int main(int argc, char** argv) {
                                   {"str_others", test_str_others},
                                   {"big", test_big},
                                   {"big_conversion", test_big_conversion},
+                                  {"prime", test_prime},
+                                  {"highly_composite", test_highly_composite},
                                   {"output", test_output},
                                   {"tags", test_tags},
                                   {"gen_errors", test_gen_errors},

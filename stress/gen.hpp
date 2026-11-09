@@ -18,6 +18,7 @@
 //   gen/array.hpp   vec / sorted / distinct / perm / partition
 //   gen/graph.hpp   tree / parents / graph / digraph / dag / bipartite
 //   gen/big.hpp     big / big_range、digits::*
+//   gen/number.hpp  prime / highly_composite
 //   gen/string.hpp  str / mutate / strs / grid
 //   gen/output.hpp  out / out_lines / raw
 
@@ -25,6 +26,7 @@
 #include "gen/big.hpp"
 #include "gen/core.hpp"
 #include "gen/graph.hpp"
+#include "gen/number.hpp"
 #include "gen/output.hpp"
 #include "gen/string.hpp"
 
@@ -34,6 +36,7 @@ class Gen : public Core,
             public ArrayOps<Gen>,
             public GraphOps<Gen>,
             public BigOps<Gen>,
+            public NumberOps<Gen>,
             public StringOps<Gen>,
             public Output {
   public:

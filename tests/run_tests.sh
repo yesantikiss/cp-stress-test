@@ -114,6 +114,28 @@ kind_is shrink_skips_gen_fail WA
 log_has shrink_gen_fail_warning shrink_skips_gen_fail '^warning: .*GEN_FAIL|^  GEN_FAIL'
 [ "$(head -1 in.txt)" -ge 6 ] 2>/dev/null && echo "ok   shrink_in_txt_is_real_failure" || { echo "FAIL shrink_in_txt_is_real_failure"; fail=1; }
 
+# 縮小中の Ctrl+C: 縮小をやめて、見つけた失敗を保存する
+check shrink_interrupt 1 python3 "$root/tests/limits/interrupt.py" "shrinking" "$root/stress.py" --seed 1
+kind_is shrink_interrupt WA
+log_has shrink_interrupt_msg shrink_interrupt '^shrink interrupted'
+[ "$(head -1 in.txt)" -ge 6 ] 2>/dev/null && echo "ok   shrink_interrupt_in_txt" || { echo "FAIL shrink_interrupt_in_txt"; fail=1; }
+
+# 子プロセスの上限と後始末
+work_l="$build_dir/limits"
+rm -rf "$work_l" && cp -r "$root/tests/limits" "$work_l" && cd "$work_l"
+# スタックは 8 MB ではなく 1024 MB まで使える（深さ 100 万の再帰が RE にならない）
+check limits_deep_stack 0 st --main main_deep.cpp -n 2 --seed 1
+check limits_deep_bench 0 st bench deep --main main_deep.cpp -n 1 --seed 1
+# 出力が止まらない main は --output-limit で止まって RE、保存される出力も上限まで
+check limits_output 1 st --main main_spam.cpp -n 1 --seed 1 --output-limit 1 --no-to-in
+kind_is limits_output RE
+log_has limits_output_msg limits_output '^RE  main: signal SIGXFSZ'
+[ "$(stat -c %s .stress/last/out_main.txt)" -le 1048576 ] && echo "ok   limits_output_size" || { echo "FAIL limits_output_size"; fail=1; }
+# Ctrl+C で止めたら、走っていた main も止まる
+check limits_interrupt 130 python3 "$root/tests/limits/interrupt.py" "mode=" "$root/stress.py" --main main_loop.cpp --tl 60 -n 1 --seed 1
+sleep 0.5
+if pgrep -f "$work_l/.stress/bin/main-" >/dev/null; then echo "FAIL limits_interrupt_no_leftover"; pkill -9 -f "$work_l/.stress/bin/main-"; fail=1; else echo "ok   limits_interrupt_no_leftover"; fi
+
 # 名前付き生成器、make、bench
 work2="$build_dir/multi"
 rm -rf "$work2" && cp -r "$root/tests/multi" "$work2" && cd "$work2"

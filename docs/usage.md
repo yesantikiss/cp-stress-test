@@ -78,6 +78,7 @@ copied failing input -> in.txt
 | `--tl SEC` | main の制限時間（既定 2 秒） |
 | `--ref-tl SEC` | 愚直解の制限時間（既定 10 秒） |
 | `--checker-tl SEC` | checker と interactor の制限時間（既定 10 秒） |
+| `--output-limit MB` | main と愚直解が書ける出力の上限（既定 64 MB。[実行環境](#実行環境)） |
 | `--no-to-in` | 失敗した入力を in.txt にコピーしない（[in.txt への書き出し](#intxt-への書き出し)） |
 | `--gen-tl SEC` | gen の制限時間（既定 10 秒） |
 | `--gen-file SRC` | 生成器のソース（既定 gen.cpp） |
@@ -85,12 +86,25 @@ copied failing input -> in.txt
 
 制限時間は実時間で測る。
 
+### 実行環境
+
+main、愚直解、gen、checker、interactor は次の条件で動かす。
+
+| 項目 | 内容 |
+| --- | --- |
+| スタック | 1024 MB まで（AtCoder と同じくメモリ制限まで使える）。深さ 100 万の再帰でも落ちない。`ulimit -s` の方が大きければそちら |
+| 出力 | main と愚直解は、stdout と stderr のそれぞれに `--output-limit` MB（既定 64）まで書ける。超えるとその場で止まり、RE（`signal SIGXFSZ (output over --output-limit)`）、愚直解なら REF_RE になる |
+| メモリ | 制限しない |
+
+- 出力の上限は、無限ループで出力し続けるバグでディスクを埋めないためのもの。保存される出力も上限までになる。
+- 実行時間は、プログラムが終わった時点で測る（Linux の pidfd で待つので、数 ms 以上ずれない）。
+
 ### 判定の種類
 
 | 判定 | 意味 | 保存 |
 | --- | --- | --- |
 | WA | 愚直解と出力が違う、checker / interactor が WA | する |
-| RE | main が 0 以外で終わった、シグナルで落ちた | する |
+| RE | main が 0 以外で終わった、シグナルで落ちた、出力が `--output-limit` を超えた | する |
 | TLE | main が `--tl` を超えた | する |
 | REF_RE / REF_TLE | 愚直解が落ちた / `--ref-tl` を超えた | する |
 | GEN_FAIL | gen が落ちた / `--gen-tl` を超えた | しない |
@@ -115,6 +129,8 @@ copied failing input -> in.txt
 - cap 1 つにつき `--shrink-tries` 回（既定 200）、別の seed で試す。最初に失敗したものを残す。
 - 全体で `--shrink-time` 秒（既定 20）を超えたら打ち切り、元の失敗を残す。
 - 縮小で見つかった失敗は判定の種類が元と違うこともある（WA で見つけて、小さい cap では RE など）。
+- 縮小を始めるときに `WA at case=...; shrinking` のように元の失敗のケース ID を出す。
+- 縮小中に Ctrl+C を押すと、縮小をやめて元の失敗を保存して表示する（`shrink interrupted` と出る）。終了コードは 1。縮小の外で Ctrl+C を押したときは何も保存せずに止まる（終了コード 130）。
 - 縮小中に GEN_FAIL、CHECKER_FAIL、INTERACTOR_FAIL が出たら、そのケースは採用せずに飛ばして縮小を続ける。終わったあとに `warning: 縮小中に道具の側の失敗が 3 回出た` のように回数と、最初のものの理由とケース ID を出す。cap 1 つにつき 200 回試すので、本体のループでは出なかった gen や checker のまれなバグがここで見つかることがある。
 
 `--no-shrink` で縮小しない。
@@ -139,7 +155,7 @@ st repro SEED:CAP:NAME [run と同じオプション]
 
 - 失敗時の `case=...` をそのまま渡す。CAP を `-` にすると上限なし、NAME を省略すると先頭の生成器を使う。
 - 再現すれば失敗として保存し、表示する（終了コード 1）。再現しなければ `OK ... (再現しなかった)` と入力の場所を出す（終了コード 0）。
-- 失敗時に表示される `st repro ...` には、そのとき使ったオプションのうち既定値と違うものが付く（`-c` / `-i`、`--ref`、`--main`、`--guchoku`、`--gen-file`、`--cmp`、`--tl`、`--ref-tl`、`--checker-tl`、`--gen-tl`、`--san`、`--cxxflags`）。なのでそのまま打てば同じ条件で再現する。
+- 失敗時に表示される `st repro ...` には、そのとき使ったオプションのうち既定値と違うものが付く（`-c` / `-i`、`--ref`、`--main`、`--guchoku`、`--gen-file`、`--cmp`、`--tl`、`--ref-tl`、`--checker-tl`、`--gen-tl`、`--output-limit`、`--san`、`--cxxflags`）。なのでそのまま打てば同じ条件で再現する。
 - `st repro -c SEED:CAP:NAME` のように `-c` / `-i` の直後にケースを書くと、argparse の上ではケースが SRC として読まれる。この形（数字で始まり `:` で区切ったもの）は st がケースとして扱い直し、SRC は既定の checker.cpp / interactor.cpp にする。
 
 ## st make
@@ -173,6 +189,7 @@ st bench [NAME ...] [-n N] [--seed S] [--cap C] [--tl SEC] [--main SRC]
 | `NAME ...` `--seed S` `--cap C` | `st make` と同じ |
 | `-n N` `--count N` | 生成器ごとの個数（既定 3） |
 | `--tl SEC` | 制限時間（既定 2 秒） |
+| `--output-limit MB` | 出力の上限（既定 64 MB） |
 | `--main SRC` | 解答（既定 main.cpp） |
 
 ビルドのオプションも使える。
@@ -289,4 +306,4 @@ st が問題のディレクトリの in.txt を書くのは、失敗したとき
 | 0 | 全部 OK（`st repro` では再現しなかった） |
 | 1 | 失敗を見つけた（`st bench` では TLE か RE があった） |
 | 2 | ビルドや引数のエラー、GEN_FAIL、CHECKER_FAIL、INTERACTOR_FAIL |
-| 130 | Ctrl+C で止めた |
+| 130 | Ctrl+C で止めた（走っていた main なども止める。縮小中の Ctrl+C は 1） |

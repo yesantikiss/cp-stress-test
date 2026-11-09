@@ -24,13 +24,16 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import hashlib
 import json
 import math
 import os
 import re
+import resource
 import shlex
+import select
 import shutil
 import signal
 import subprocess
@@ -204,6 +207,61 @@ class BuildError(Exception):
 # ---------------------------------------------------------------- 実行
 
 
+STACK_MB = 1024  # 子プロセスのスタックの上限。AtCoder と同じくメモリ制限（1024 MB）まで使えるようにする
+MB = 1 << 20
+
+
+@contextlib.contextmanager
+def child_limits(output_mb: float | None):
+    """この中で起動した子プロセスに、スタックの上限と、書けるファイルの大きさの上限（output_mb）を付ける。
+
+    子プロセスは起動したときの st の上限を受け継ぐので、起動する間だけ st 自身の上限を変えて戻す。
+    スタックは今の上限より小さくはしない（ulimit -s unlimited ならそのまま）。
+    ファイルの上限を超えた子プロセスは SIGXFSZ で止まる（Popen が SIGXFSZ を既定の動作に戻すため）。
+    """
+    saved: list[tuple[int, tuple[int, int]]] = []
+    inf = resource.RLIM_INFINITY
+    try:
+        for res, want in ((resource.RLIMIT_STACK, STACK_MB),
+                          (resource.RLIMIT_FSIZE, output_mb)):
+            if want is None:
+                continue
+            soft, hard = resource.getrlimit(res)
+            new = int(want * MB) if hard == inf else min(int(want * MB), hard)
+            if res == resource.RLIMIT_STACK and (soft == inf or soft >= new):
+                continue
+            resource.setrlimit(res, (new, hard))
+            saved.append((res, (soft, hard)))
+        yield
+    finally:
+        for res, lim in reversed(saved):
+            resource.setrlimit(res, lim)
+
+
+def wait_exit(proc: subprocess.Popen, timeout: float) -> bool:
+    """proc が終わるまで最大 timeout 秒待つ。終わったら True（回収はしないので、続けて proc.wait() を呼ぶ）。
+
+    Popen.wait(timeout=...) は最大 50 ms 間隔で終わったかを見に行くので、そのぶん遅く、時間も長く測ってしまう。
+    Linux では pidfd で終わった瞬間に起きる。使えないときだけ Popen.wait に任せる。
+    """
+    if hasattr(os, "pidfd_open"):
+        try:
+            fd = os.pidfd_open(proc.pid)
+        except OSError:
+            fd = -1
+        if fd >= 0:
+            try:
+                ready, _, _ = select.select([fd], [], [], max(0.0, timeout))
+            finally:
+                os.close(fd)
+            return bool(ready)
+    try:
+        proc.wait(timeout=timeout)
+        return True
+    except subprocess.TimeoutExpired:
+        return False
+
+
 @dataclass
 class RunResult:
     status: str  # OK / RE / TLE
@@ -212,29 +270,35 @@ class RunResult:
 
 
 def run(exe: Path | list[str], stdin: Path | None, stdout: Path, stderr: Path, tl: float,
-        cwd: Path, args: list[str] | None = None, env: dict[str, str] | None = None) -> RunResult:
+        cwd: Path, args: list[str] | None = None, env: dict[str, str] | None = None,
+        output_mb: float | None = None) -> RunResult:
+    """1 回実行する。Ctrl+C などで抜けるときも、子プロセスは必ず止める。"""
     cmd = [str(exe)] if isinstance(exe, Path) else list(exe)
     cmd += args or []
-    start = time.perf_counter()
-    with open(stdout, "wb") as fo, open(stderr, "wb") as fe:
-        fi = open(stdin, "rb") if stdin else subprocess.DEVNULL
+    proc = None
+    with open(stdout, "wb") as fo, open(stderr, "wb") as fe, \
+            (open(stdin, "rb") if stdin else contextlib.nullcontext(subprocess.DEVNULL)) as fi:
         try:
-            proc = subprocess.Popen(cmd, stdin=fi, stdout=fo, stderr=fe, cwd=cwd, start_new_session=True,
-                                    env={**os.environ, **env} if env else None)
-            try:
-                code = proc.wait(timeout=tl)
-            except subprocess.TimeoutExpired:
-                os.killpg(proc.pid, signal.SIGKILL)
+            with child_limits(output_mb):
+                start = time.perf_counter()
+                proc = subprocess.Popen(cmd, stdin=fi, stdout=fo, stderr=fe, cwd=cwd, start_new_session=True,
+                                        env={**os.environ, **env} if env else None)
+            if not wait_exit(proc, tl):
+                _kill(proc)
                 proc.wait()
                 return RunResult("TLE", -9, time.perf_counter() - start)
+            code = proc.wait()
+            elapsed = time.perf_counter() - start
         finally:
-            if stdin:
-                fi.close()
-    elapsed = time.perf_counter() - start
+            if proc is not None and proc.returncode is None:
+                _kill(proc)
+                proc.wait()
     return RunResult("OK" if code == 0 else "RE", code, elapsed)
 
 
 def describe_code(code: int) -> str:
+    if code == -signal.SIGXFSZ:
+        return "signal SIGXFSZ (output over --output-limit)"
     if code < 0:
         try:
             return f"signal {signal.Signals(-code).name}"
@@ -361,14 +425,15 @@ def run_case(progs: Programs, case: Case, d: Path, opt: argparse.Namespace) -> V
     if progs.interactor:
         return run_interactive(progs, d, opt)
 
-    m = run(progs.main, inp, d / "out_main.txt", d / "stderr_main.txt", opt.tl, d)
+    m = run(progs.main, inp, d / "out_main.txt", d / "stderr_main.txt", opt.tl, d, output_mb=opt.output_limit)
     if m.status == "TLE":
         return Verdict("TLE", f"main exceeded {opt.tl}s", m.elapsed)
     if m.status == "RE":
         return Verdict("RE", f"main: {describe_code(m.code)}", m.elapsed)
 
     if progs.ref:
-        r = run(progs.ref, inp, d / "out_ref.txt", d / "stderr_ref.txt", opt.ref_tl, d)
+        r = run(progs.ref, inp, d / "out_ref.txt", d / "stderr_ref.txt", opt.ref_tl, d,
+                output_mb=opt.output_limit)
         if r.status == "TLE":
             return Verdict("REF_TLE", f"guchoku exceeded {opt.ref_tl}s", m.elapsed)
         if r.status == "RE":
@@ -483,12 +548,25 @@ def run_interactive(progs: Programs, d: Path, opt: argparse.Namespace) -> Verdic
     report = d / "report_interactor.txt"
     env = dict(os.environ, STRESS_REPORT=str(report))
     log = Transcript()
-    with open(d / "stderr_main.txt", "wb") as em, open(d / "stderr_interactor.txt", "wb") as ei:
-        start = time.perf_counter()
-        main = subprocess.Popen([str(progs.main)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=em,
-                                cwd=d, start_new_session=True)
-        inter = subprocess.Popen([str(progs.interactor), str(d / "in.txt")], stdin=subprocess.PIPE,
-                                 stdout=subprocess.PIPE, stderr=ei, cwd=d, start_new_session=True, env=env)
+    main = inter = None
+    try:
+        with open(d / "stderr_main.txt", "wb") as em, open(d / "stderr_interactor.txt", "wb") as ei, \
+                child_limits(opt.output_limit):
+            start = time.perf_counter()
+            main = subprocess.Popen([str(progs.main)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=em,
+                                    cwd=d, start_new_session=True)
+            inter = subprocess.Popen([str(progs.interactor), str(d / "in.txt")], stdin=subprocess.PIPE,
+                                     stdout=subprocess.PIPE, stderr=ei, cwd=d, start_new_session=True, env=env)
+        return _interact(main, inter, start, log, report, d, opt)
+    finally:
+        for p in (main, inter):  # Ctrl+C などで抜けたときも、子プロセスを残さない
+            if p is not None:
+                _kill(p)
+                p.wait()
+
+
+def _interact(main: subprocess.Popen, inter: subprocess.Popen, start: float, log: Transcript, report: Path,
+              d: Path, opt: argparse.Namespace) -> Verdict:
     pumps = [threading.Thread(target=_pump, args=(main.stdout, inter.stdin, ">", log), daemon=True),
              threading.Thread(target=_pump, args=(inter.stdout, main.stdin, "<", log), daemon=True)]
     for t in pumps:
@@ -619,6 +697,7 @@ def judge_flags(opt: argparse.Namespace) -> str:
                                 ("--gen-file", "gen_file", "gen.cpp"), ("--cmp", "cmp", "token"),
                                 ("--tl", "tl", 2.0), ("--ref-tl", "ref_tl", 10.0),
                                 ("--checker-tl", "checker_tl", 10.0), ("--gen-tl", "gen_tl", 10.0),
+                                ("--output-limit", "output_limit", 64.0),
                                 ("--cxxflags", "cxxflags", os.environ.get("STRESS_CXXFLAGS", ""))):
         value = getattr(opt, attr, default)
         if value is None or value == default:
@@ -735,18 +814,22 @@ def shrink(progs: Programs, case: Case, run_dir: Path, opt: argparse.Namespace,
                   | ({cap // 2, cap * 3 // 4} - {0, cap}))
     base = splitmix64(case.seed ^ 0x5EED)
     tool_failures: list[tuple[Case, Verdict]] = []
-    for c in caps:
-        for t in range(opt.shrink_tries):
-            if time.monotonic() > deadline:
-                return None, tool_failures
-            cand = Case(case_seed(base, c * 1_000_003 + t), c, case.name)
-            Out.status(f"shrinking: cap={c} try {t + 1}/{opt.shrink_tries}")
-            v = run_case(progs, cand, run_dir, opt)
-            if v.kind in TOOL_FAILURES:
-                tool_failures.append((cand, v))
-                continue
-            if v.kind != "OK":
-                return (cand, v), tool_failures
+    try:
+        for c in caps:
+            for t in range(opt.shrink_tries):
+                if time.monotonic() > deadline:
+                    return None, tool_failures
+                cand = Case(case_seed(base, c * 1_000_003 + t), c, case.name)
+                Out.status(f"shrinking: cap={c} try {t + 1}/{opt.shrink_tries}")
+                v = run_case(progs, cand, run_dir, opt)
+                if v.kind in TOOL_FAILURES:
+                    tool_failures.append((cand, v))
+                    continue
+                if v.kind != "OK":
+                    return (cand, v), tool_failures
+    except KeyboardInterrupt:
+        # 縮小は待ちきれずに止めることがあるので、Ctrl+C は「縮小をやめる」にして元の失敗を残す
+        Out.log(Out.yellow("shrink interrupted") + "  縮小をやめて、見つけた失敗をそのまま保存する")
     return None, tool_failures
 
 
@@ -897,6 +980,7 @@ def cmd_run(opt: argparse.Namespace) -> int:
             if snapshot.exists():
                 shutil.rmtree(snapshot)
             shutil.copytree(run_dir, snapshot)
+            Out.log(Out.dim(f"{v.kind} at case={case.id}; shrinking (Ctrl+C で縮小をやめて保存)"))
             found, tool_failures = shrink(progs, case, run_dir, opt, time.monotonic() + opt.shrink_time)
             Out.clear_status()
             if tool_failures:
@@ -988,7 +1072,8 @@ def cmd_bench(opt: argparse.Namespace) -> int:
         label = f"{case.name}-{k % opt.count + 1:02d}"
         shutil.copy2(tmp / "in.txt", benchdir / f"{label}.txt")
         Out.status(f"running {label} ...")
-        r = run(progs.main, tmp / "in.txt", tmp / "out_main.txt", tmp / "stderr_main.txt", opt.tl, tmp)
+        r = run(progs.main, tmp / "in.txt", tmp / "out_main.txt", tmp / "stderr_main.txt", opt.tl, tmp,
+                output_mb=opt.output_limit)
         kb = (tmp / "in.txt").stat().st_size / 1024
         if r.status == "OK":
             worst = max(worst, r.elapsed)
@@ -1089,9 +1174,15 @@ def add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--tl", type=float, default=2.0, help="main の制限時間 [s] (default: 2)")
     p.add_argument("--ref-tl", type=float, default=10.0, help="愚直解の制限時間 [s] (default: 10)")
     p.add_argument("--checker-tl", type=float, default=10.0, help="checker / interactor の制限時間 [s] (default: 10)")
+    add_output_limit(p)
     p.add_argument("--cmp", default=None, help="比較方法: token (default) / exact / float[:EPS]")
     p.add_argument("--no-to-in", dest="to_in", action="store_false",
                    help="失敗した入力を in.txt にコピーしない（既定ではコピーする）")
+
+
+def add_output_limit(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--output-limit", type=float, default=64.0, metavar="MB",
+                   help="main と愚直解が書ける出力（stdout と stderr それぞれ）の上限 [MB] (default: 64)")
 
 
 def add_cases(p: argparse.ArgumentParser, count: int) -> None:
@@ -1137,6 +1228,7 @@ def parse(argv: list[str]) -> argparse.Namespace:
     add_cases(p, 3)
     p.add_argument("--main", default="main.cpp", help="解答 (default: main.cpp)")
     p.add_argument("--tl", type=float, default=2.0, help="制限時間 [s] (default: 2)")
+    add_output_limit(p)
 
     p = sub.add_parser("last", help="直前の失敗を表示する")
     p.add_argument("--to-in", action="store_true", help="失敗した入力を in.txt にコピーする")

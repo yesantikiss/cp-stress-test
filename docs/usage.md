@@ -93,7 +93,7 @@ main、愚直解、gen、checker、interactor は次の条件で動かす。
 | 項目 | 内容 |
 | --- | --- |
 | スタック | 1024 MB まで（AtCoder と同じくメモリ制限まで使える）。深さ 100 万の再帰でも落ちない。`ulimit -s` の方が大きければそちら |
-| 出力 | main と愚直解は、stdout と stderr のそれぞれに `--output-limit` MB（既定 64）まで書ける。超えるとその場で止まり、RE（`signal SIGXFSZ (output over --output-limit)`）、愚直解なら REF_RE になる |
+| 出力 | main と愚直解は、stdout と stderr のそれぞれに `--output-limit` MB（既定 64）まで書ける。超えるとその場で止まり、OLE（愚直解なら REF_OLE）になる |
 | メモリ | 制限しない |
 
 - 出力の上限は、無限ループで出力し続けるバグでディスクを埋めないためのもの。保存される出力も上限までになる。
@@ -104,9 +104,10 @@ main、愚直解、gen、checker、interactor は次の条件で動かす。
 | 判定 | 意味 | 保存 |
 | --- | --- | --- |
 | WA | 愚直解と出力が違う、checker / interactor が WA | する |
-| RE | main が 0 以外で終わった、シグナルで落ちた、出力が `--output-limit` を超えた | する |
+| RE | main が 0 以外で終わった、シグナルで落ちた | する |
+| OLE | main の出力（stdout か stderr）が `--output-limit` を超えた | する |
 | TLE | main が `--tl` を超えた | する |
-| REF_RE / REF_TLE | 愚直解が落ちた / `--ref-tl` を超えた | する |
+| REF_RE / REF_TLE / REF_OLE | 愚直解が落ちた / `--ref-tl` を超えた / 出力が `--output-limit` を超えた | する |
 | GEN_FAIL | gen が落ちた / `--gen-tl` を超えた | しない |
 | CHECKER_FAIL / INTERACTOR_FAIL | checker が 0 と 1 以外で終わった（3、その他の値、例外やシグナル）、interactor が終了コード 3 で終わった、落ちた、どちらかが TL を超えた | しない |
 
@@ -195,7 +196,7 @@ st bench [NAME ...] [-n N] [--seed S] [--cap C] [--tl SEC] [--main SRC]
 ビルドのオプションも使える。
 
 - `--tl` の 8 割を超えたケースは黄色で出す。
-- TLE か RE が 1 つでもあれば終了コード 1、なければ一番遅かった時間を出して 0。
+- TLE、RE、OLE が 1 つでもあれば終了コード 1、なければ一番遅かった時間を出して 0。
 - 使った入力は `.stress/bench/` に残る（次の `st bench` で消える）。
 
 ## st last
@@ -304,6 +305,6 @@ st が問題のディレクトリの in.txt を書くのは、失敗したとき
 | コード | 意味 |
 | --- | --- |
 | 0 | 全部 OK（`st repro` では再現しなかった） |
-| 1 | 失敗を見つけた（`st bench` では TLE か RE があった） |
+| 1 | 失敗を見つけた（`st bench` では TLE、RE、OLE があった） |
 | 2 | ビルドや引数のエラー、GEN_FAIL、CHECKER_FAIL、INTERACTOR_FAIL |
 | 130 | Ctrl+C で止めた（走っていた main なども止める。縮小中の Ctrl+C は 1） |

@@ -264,7 +264,7 @@ def wait_exit(proc: subprocess.Popen, timeout: float) -> bool:
 
 @dataclass
 class RunResult:
-    status: str  # OK / RE / TLE
+    status: str  # OK / RE / TLE / OLE（出力が output_mb を超えた）
     code: int
     elapsed: float
 
@@ -293,7 +293,8 @@ def run(exe: Path | list[str], stdin: Path | None, stdout: Path, stderr: Path, t
             if proc is not None and proc.returncode is None:
                 _kill(proc)
                 proc.wait()
-    return RunResult("OK" if code == 0 else "RE", code, elapsed)
+    status = "OK" if code == 0 else "OLE" if code == -signal.SIGXFSZ and output_mb is not None else "RE"
+    return RunResult(status, code, elapsed)
 
 
 def describe_code(code: int) -> str:
@@ -342,7 +343,7 @@ def compare(a: bytes, b: bytes, mode: str) -> tuple[bool, str]:
 
 @dataclass
 class Verdict:
-    kind: str          # OK / WA / RE / TLE / REF_RE / REF_TLE / CHECKER_FAIL / INTERACTOR_FAIL / GEN_FAIL
+    kind: str          # OK / WA / RE / TLE / OLE / REF_RE / REF_TLE / REF_OLE / CHECKER_FAIL / INTERACTOR_FAIL / GEN_FAIL
     detail: str = ""
     elapsed: float = 0.0
     queries: tuple[int, int] | None = None  # インタラクティブ: (使った回数, 制限 or -1)
@@ -428,6 +429,8 @@ def run_case(progs: Programs, case: Case, d: Path, opt: argparse.Namespace) -> V
     m = run(progs.main, inp, d / "out_main.txt", d / "stderr_main.txt", opt.tl, d, output_mb=opt.output_limit)
     if m.status == "TLE":
         return Verdict("TLE", f"main exceeded {opt.tl}s", m.elapsed)
+    if m.status == "OLE":
+        return Verdict("OLE", f"main output exceeded {opt.output_limit:g} MB", m.elapsed)
     if m.status == "RE":
         return Verdict("RE", f"main: {describe_code(m.code)}", m.elapsed)
 
@@ -436,6 +439,8 @@ def run_case(progs: Programs, case: Case, d: Path, opt: argparse.Namespace) -> V
                 output_mb=opt.output_limit)
         if r.status == "TLE":
             return Verdict("REF_TLE", f"guchoku exceeded {opt.ref_tl}s", m.elapsed)
+        if r.status == "OLE":
+            return Verdict("REF_OLE", f"guchoku output exceeded {opt.output_limit:g} MB", m.elapsed)
         if r.status == "RE":
             return Verdict("REF_RE", f"guchoku: {describe_code(r.code)}", m.elapsed)
 
@@ -630,6 +635,8 @@ def _interact(main: subprocess.Popen, inter: subprocess.Popen, start: float, log
         v = Verdict("INTERACTOR_FAIL", what, main_time)
     elif ic == 1 and not (main_crashed and by_main_end):
         v = Verdict("WA", last_msg[4:] if last_msg.startswith("WA: ") else last_msg or "interactor exit 1", main_time)
+    elif main_crashed and mc == -signal.SIGXFSZ:
+        v = Verdict("OLE", f"main stderr exceeded {opt.output_limit:g} MB", main_time)
     elif main_crashed:
         v = Verdict("RE", f"main: {describe_code(mc)}", main_time)
     elif ic == 1:
@@ -638,7 +645,7 @@ def _interact(main: subprocess.Popen, inter: subprocess.Popen, start: float, log
         v = Verdict("OK", "", main_time)
     if main_tle:
         log.note(f"[st] main killed after {opt.tl}s")
-    elif v.kind == "RE":
+    elif v.kind in ("RE", "OLE"):
         log.note(f"[st] main: {describe_code(mc)}")
     elif v.kind != "OK" and last_msg:
         log.note(f"[interactor] {last_msg}")
@@ -1082,7 +1089,8 @@ def cmd_bench(opt: argparse.Namespace) -> int:
             Out.log(f"{label:<20} {mark}  " + Out.dim(f"input {kb:.0f}KB  case={case.id}"))
         else:
             bad_count += 1
-            what = f"TLE (> {opt.tl}s)" if r.status == "TLE" else f"RE ({describe_code(r.code)})"
+            what = {"TLE": f"TLE (> {opt.tl}s)", "OLE": f"OLE (> {opt.output_limit:g} MB)"}.get(
+                r.status, f"RE ({describe_code(r.code)})")
             Out.log(f"{label:<20} {Out.red(what)}  " + Out.dim(f"input {kb:.0f}KB  case={case.id}"))
     Out.log(Out.dim(f"inputs: {benchdir.relative_to(workdir)}/"))
     if bad_count:

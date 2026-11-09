@@ -126,11 +126,16 @@ rm -rf "$work_l" && cp -r "$root/tests/limits" "$work_l" && cd "$work_l"
 # スタックは 8 MB ではなく 1024 MB まで使える（深さ 100 万の再帰が RE にならない）
 check limits_deep_stack 0 st --main main_deep.cpp -n 2 --seed 1
 check limits_deep_bench 0 st bench deep --main main_deep.cpp -n 1 --seed 1
-# 出力が止まらない main は --output-limit で止まって RE、保存される出力も上限まで
+# 出力が止まらない main は --output-limit で止まって OLE、保存される出力も上限まで
 check limits_output 1 st --main main_spam.cpp -n 1 --seed 1 --output-limit 1 --no-to-in
-kind_is limits_output RE
-log_has limits_output_msg limits_output '^RE  main: signal SIGXFSZ'
+kind_is limits_output OLE
+log_has limits_output_msg limits_output '^OLE  main output exceeded 1 MB'
 [ "$(stat -c %s .stress/last/out_main.txt)" -le 1048576 ] && echo "ok   limits_output_size" || { echo "FAIL limits_output_size"; fail=1; }
+# 愚直解が出し続けたら REF_OLE、bench でも OLE と出る
+check limits_ref_output 1 st --main main_deep.cpp --guchoku main_spam.cpp -n 1 --seed 1 --output-limit 1 --no-to-in
+kind_is limits_ref_output REF_OLE
+check limits_bench_output 1 st bench deep --main main_spam.cpp -n 1 --seed 1 --output-limit 1
+log_has limits_bench_output_msg limits_bench_output 'OLE \(> 1 MB\)'
 # Ctrl+C で止めたら、走っていた main も止まる
 check limits_interrupt 130 python3 "$root/tests/limits/interrupt.py" "mode=" "$root/stress.py" --main main_loop.cpp --tl 60 -n 1 --seed 1
 sleep 0.5

@@ -105,13 +105,14 @@ random の形は範囲などの共通の条件だけを見る。
 
 ### st のテスト
 
-`tests/sample`、`tests/multi`、`tests/interactive`、`tests/shrink` に、正しい解とわざと間違えた解（WA / RE / TLE、flush 忘れ、クエリ回数超過、余分な出力など）や、わざと壊した愚直解、gen、checker を置き、`st` の終了コード、判定の種類、保存されるファイルを確かめる。
+`tests/sample`、`tests/multi`、`tests/interactive`、`tests/shrink`、`tests/limits` に、正しい解とわざと間違えた解（WA / RE / TLE、flush 忘れ、クエリ回数超過、余分な出力など）や、わざと壊した愚直解、gen、checker を置き、`st` の終了コード、判定の種類、保存されるファイルを確かめる。
 
-- 判定: OK / WA / RE / TLE / REF_RE / REF_TLE、checker（`-c`、`--ref`）、interactor（`-i`、適応的な interactor）
+- 判定: OK / WA / RE / TLE / OLE / REF_RE / REF_TLE / REF_OLE、checker（`-c`、`--ref`）、interactor（`-i`、適応的な interactor）
 - 道具の側の失敗: gen error は GEN_FAIL、checker が例外で落ちたら CHECKER_FAIL で、どちらも終了コード 2
 - 比較方法: `--cmp exact`、`--cmp float:EPS`（誤差の内と外）、token で小数がずれたら WA
 - インタラクティブ: interactor の WA の直後に main が落ちても、10 回とも WA になる
-- 縮小: 縮小中に gen error が出ても本物の WA を残し、警告を出す
+- 縮小: 縮小中に gen error が出ても本物の WA を残し、警告を出す。縮小中に Ctrl+C（SIGINT）を送ると、元の WA を保存して終了コード 1
+- 実行環境: 深さ 100 万の再帰が `st` でも `st bench` でも落ちない。出力し続ける main が `--output-limit` で止まって OLE（愚直解なら REF_OLE、`st bench` でも OLE）になり、保存された出力が上限以下。Ctrl+C で止めたあとに main が残らない
 - 再現: `st repro` で同じ入力が出る。失敗時に表示された `st repro ...` に `--main` `--cmp` `--tl` が付き、そのまま打てば再現する
 - in.txt: 失敗時の書き出し、手書きの in.txt の退避、`--no-to-in`、`st restore`
 - 生成器: `-g` での選択、STRESS_BIG の回数、`st make`、`st bench`、タグの表示

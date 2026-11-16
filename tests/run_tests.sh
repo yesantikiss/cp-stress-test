@@ -255,6 +255,91 @@ else
     echo "FAIL rr_gen_c"; fail=1
 fi
 
+# -j: 並列に回しても、同じ seed なら直列と同じ失敗（縮小のあとも同じ）になる
+cd "$work"
+same_case() {  # same_case <名前> <st の引数...>: -j 1 と -j 4 で、保存されたケースと何件目で見つけたかが同じか
+    local name="$1" c1 c4 f1 f4; shift
+    st "$@" -j 1 --no-to-in >"$build_dir/${name}_j1.log" 2>&1
+    c1="$(python3 -c 'import json;print(json.load(open(".stress/last/meta.json"))["case"])')"
+    st "$@" -j 4 --no-to-in >"$build_dir/${name}_j4.log" 2>&1
+    c4="$(python3 -c 'import json;print(json.load(open(".stress/last/meta.json"))["case"])')"
+    f1="$(grep -o 'found after [0-9]* cases' "$build_dir/${name}_j1.log")"
+    f4="$(grep -o 'found after [0-9]* cases' "$build_dir/${name}_j4.log")"
+    if [ -n "$c1" ] && [ "$c1" = "$c4" ] && [ -n "$f1" ] && [ "$f1" = "$f4" ]; then echo "ok   $name"
+    else echo "FAIL $name (j1: $c1 $f1, j4: $c4 $f4)"; fail=1; fi
+}
+for s in 1 2 3; do same_case "par_same_wa_$s" --main main_wa.cpp --seed "$s"; done
+same_case par_same_re --main main_re.cpp --seed 2
+same_case par_same_no_shrink --main main_wa.cpp --seed 4 --no-shrink
+same_case par_same_checker -c checker.cpp --main main_wa.cpp --seed 5
+check par_ok        0 st --main main_ok.cpp -n 300 --seed 1 -j 4
+grep -q 'OK  300 cases' "$build_dir/par_ok.log" && echo "ok   par_ok_count" || { echo "FAIL par_ok_count"; fail=1; }
+check par_auto      0 st --main main_ok.cpp -n 50 --seed 1 -j
+check par_bad       2 st --main main_ok.cpp -j -1
+check par_gen_fail  2 st --main main_ok.cpp --gen-file gen_bad.cpp --seed 1 -j 4
+log_has par_gen_fail_msg par_gen_fail '^GEN_FAIL '
+# 本当の TLE は単独で測り直しても TLE なので、そのまま失敗
+check par_tle       1 st --main main_tle.cpp --seed 3 --tl 1 -j 4 --no-to-in
+kind_is par_tle TLE
+log_has par_tle_found par_tle '^found after'
+
+# 縮小も並列。gen error は飛ばし、Ctrl+C で縮小をやめて保存する
+cd "$work_s"
+check par_shrink_skips_gen_fail 1 st --seed 1 -j 4 --no-to-in
+kind_is par_shrink_skips_gen_fail WA
+log_has par_shrink_gen_fail_warning par_shrink_skips_gen_fail '^warning: .*GEN_FAIL|^  GEN_FAIL'
+check par_shrink_interrupt 1 python3 "$root/tests/limits/interrupt.py" "shrinking" "$root/stress.py" --seed 1 -j 4 --no-to-in
+kind_is par_shrink_interrupt WA
+log_has par_shrink_interrupt_msg par_shrink_interrupt '^shrink interrupted'
+
+# 並列でも子プロセスの上限が付く。Ctrl+C で全部止まる
+cd "$work_l"
+check par_limits_output 1 st --main main_spam.cpp -n 4 --seed 1 --output-limit 1 --no-to-in -j 4
+kind_is par_limits_output OLE
+[ "$(stat -c %s .stress/last/out_main.txt)" -le 1048576 ] && echo "ok   par_limits_output_size" || { echo "FAIL par_limits_output_size"; fail=1; }
+check par_limits_deep 0 st --main main_deep.cpp -n 4 --seed 1 -j 4
+check par_limits_interrupt 130 python3 "$root/tests/limits/interrupt.py" "mode=" "$root/stress.py" --main main_loop.cpp --tl 60 -n 8 --seed 1 -j 4
+sleep 0.5
+if pgrep -f "$work_l/.stress/bin/main-" >/dev/null; then echo "FAIL par_limits_interrupt_no_leftover"; pkill -9 -f "$work_l/.stress/bin/main-"; fail=1; else echo "ok   par_limits_interrupt_no_leftover"; fi
+
+# インタラクティブと、STRESS_BIG の寿命つきの順番
+cd "$work3"
+check par_inter_ok  0 st -i interactor.cpp --main main_ok.cpp -n 300 --seed 1 -j 4
+same_case par_same_inter_wa -i interactor.cpp --main main_wa.cpp --seed 1
+cd "$work_rr"
+check par_rr_no_skip 1 st -g a,b,c --big-iters 1 --seed 1 --no-to-in -j 3
+log_has par_rr_found_after_3 par_rr_no_skip '^found after 3 cases'
+
+# -j で TLE が出ても、単独で測り直して通るなら -j 1 に切り替えて続ける
+# （この main は、ほかの main と同時に動くと 3 秒待つ）
+work_b="$build_dir/busy"
+rm -rf "$work_b" && mkdir -p "$work_b" && cd "$work_b"
+cat > gen.cpp << 'EOF'
+#include "stress/gen.hpp"
+void gen(Gen& g) { g.out(1); (void)g; }
+EOF
+cat > guchoku.cpp << 'EOF'
+#include <iostream>
+int main() { std::cout << "1\n"; }
+EOF
+cat > main.cpp << 'EOF'
+#include <chrono>
+#include <cstdlib>
+#include <iostream>
+#include <thread>
+#include <fcntl.h>
+#include <sys/file.h>
+int main() {
+    int fd = open(std::getenv("BUSY_LOCK"), O_RDWR | O_CREAT, 0644);
+    if (flock(fd, LOCK_EX | LOCK_NB) != 0) std::this_thread::sleep_for(std::chrono::seconds(3));
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    std::cout << "1\n";
+}
+EOF
+check par_busy_switch 0 env BUSY_LOCK="$work_b/lock" python3 "$root/stress.py" -n 40 --seed 1 --tl 1 -j 4
+log_has par_busy_warning par_busy_switch '^warning: -j 4 では TLE だったケースが単独では通った'
+grep -q 'OK  40 cases' "$build_dir/par_busy_switch.log" && echo "ok   par_busy_count" || { echo "FAIL par_busy_count"; fail=1; }
+
 # 空白や特殊文字を含むインクルード先（--cxxflags のクォート、.d 依存のキャッシュと更新検知）
 work_d="$build_dir/deps_cache"
 rm -rf "$work_d" && mkdir -p "$work_d/inc dir:2" && cd "$work_d"

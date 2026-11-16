@@ -6,7 +6,7 @@
 st init            # gen.cpp の雛形を置く（-c で checker.cpp、-i で interactor.cpp も）
 st                 # main.cpp と guchoku.cpp を gen.cpp の入力で 1000 回比べる
 st -n 5000 --seed 42
-st -g random -g all_same  # 使う生成器を絞る
+st -g random -g all_same  # 使うジェネレーターを絞る
 st -t 60           # 60 秒回す
 st -c              # checker.cpp でスペシャルジャッジ（--ref で愚直解の出力を第 3 引数に渡す）
 st -i              # interactor.cpp でインタラクティブ（docs/interactive.md）
@@ -57,9 +57,9 @@ copied failing input -> in.txt
 | --- | --- |
 | `-n N` `--iters N` | 回数（既定 1000） |
 | `-t SEC` `--time SEC` | 回数の代わりに秒数で回す |
-| `--big-iters N` | `-n` も `-t` も書かないとき、STRESS_BIG の生成器 1 つあたりの回数（既定 20、0 以上）。0 なら回さない。STRESS_BIG だけを回すときは合計もこの回数で止まる |
+| `--big-iters N` | `-n` も `-t` も書かないとき、STRESS_BIG のジェネレーター 1 つあたりの回数（既定 20、0 以上）。0 なら回さない。STRESS_BIG だけを回すときは合計もこの回数で止まる |
 | `--seed N` | 基準 seed（省略時はランダム。最後に `base_seed=...` と出る） |
-| `-g NAME` `--gen NAME` | 使う生成器。複数書ける、カンマ区切りも可。省略時は STRESS_BIG 以外を全部 |
+| `-g NAME` `--gen NAME` | 使うジェネレーター。複数書ける、カンマ区切りも可。省略時は STRESS_BIG 以外を全部 |
 | `--max-cap N` | cap の上限（[seed と cap](#seed-と-cap)） |
 | `--no-shrink` | 失敗したあと縮小しない |
 | `--shrink-tries N` | 縮小で cap 1 つあたりに試す回数（既定 200） |
@@ -81,7 +81,7 @@ copied failing input -> in.txt
 | `--output-limit MB` | main と愚直解が書ける出力の上限（既定 64 MB。[実行環境](#実行環境)） |
 | `--no-to-in` | 失敗した入力を in.txt にコピーしない（[in.txt への書き出し](#intxt-への書き出し)） |
 | `--gen-tl SEC` | gen の制限時間（既定 10 秒） |
-| `--gen-file SRC` | 生成器のソース（既定 gen.cpp） |
+| `--gen-file SRC` | ジェネレーターのソース（既定 gen.cpp） |
 | `--san` `--cxxflags FLAGS` | [ビルド](#ビルド)の設定 |
 
 制限時間は実時間で測る。
@@ -96,7 +96,7 @@ main、愚直解、gen、checker、interactor は次の条件で動かす。
 | 出力 | main と愚直解は、stdout と stderr のそれぞれに `--output-limit` MB（既定 64）まで書ける。超えるとその場で止まり、OLE（愚直解なら REF_OLE）になる |
 | メモリ | 制限しない |
 
-- 出力の上限は、無限ループで出力し続けるバグでディスクを埋めないためのもの。保存される出力も上限までになる。
+- 出力の上限は無限ループで出力し続けるバグでディスクを埋めないためのもの。保存される出力も上限までになる。
 - 実行時間は、プログラムが終わった時点で測る（Linux の pidfd で待つので、数 ms 以上ずれない）。
 
 ### 判定の種類
@@ -116,15 +116,15 @@ main、愚直解、gen、checker、interactor は次の条件で動かす。
 ## seed と cap
 
 - ケース k（0 始まり）の seed は `splitmix64(base + k)`。
-- 生成器が複数あれば、ケースごとに順番に使う（1 つ目、2 つ目、...、1 つ目、...）。
-- cap（`g.size()` の上限）は生成器ごとに 1 から始めて、その生成器を 10 回使うたびに 1 増やす。`--max-cap` を付けるとそこで止まる。
+- ジェネレーターが複数あれば、ケースごとに順番に使う（1 つ目、2 つ目、...、1 つ目、...）。
+- cap（`g.size()` の上限）はジェネレーターごとに 1 から始めて、そのジェネレーターを 10 回使うたびに 1 増やす。`--max-cap` を付けるとそこで止まる。
 - 小さい入力から試すので、最初に見つかる失敗はたいてい小さい。
 
-`--seed` を同じにすれば同じケースの列になる（gen.cpp と生成器の数が同じなら）。
+`--seed` を同じにすれば同じケースの列になる（gen.cpp とジェネレーターの数が同じなら）。
 
 ### 縮小
 
-失敗した cap が 2 以上なら、同じ生成器でもっと小さい cap を試して、失敗する入力を探し直す（縮小）。
+失敗した cap が 2 以上なら、同じジェネレーターでもっと小さい cap を試して、失敗する入力を探し直す（縮小）。
 
 - 試す cap は 1、2、3、4、5、6、8、10、12、16、20、25、32、... のうち元の cap より小さいものと、元の cap の 1/2 と 3/4。小さい方から試す。
 - cap 1 つにつき `--shrink-tries` 回（既定 200）、別の seed で試す。最初に失敗したものを残す。
@@ -154,7 +154,7 @@ WA の理由には、最初に違ったトークンの番号と両方の値、�
 st repro SEED:CAP:NAME [run と同じオプション]
 ```
 
-- 失敗時の `case=...` をそのまま渡す。CAP を `-` にすると上限なし、NAME を省略すると先頭の生成器を使う。
+- 失敗時の `case=...` をそのまま渡す。CAP を `-` にすると上限なし、NAME を省略すると先頭のジェネレーターを使う。
 - 再現すれば失敗として保存し、表示する（終了コード 1）。再現しなければ `OK ... (再現しなかった)` と入力の場所を出す（終了コード 0）。
 - 失敗時に表示される `st repro ...` には、そのとき使ったオプションのうち既定値と違うものが付く（`-c` / `-i`、`--ref`、`--main`、`--guchoku`、`--gen-file`、`--cmp`、`--tl`、`--ref-tl`、`--checker-tl`、`--gen-tl`、`--output-limit`、`--san`、`--cxxflags`）。なのでそのまま打てば同じ条件で再現する。
 - `st repro -c SEED:CAP:NAME` のように `-c` / `-i` の直後にケースを書くと、argparse の上ではケースが SRC として読まれる。この形（数字で始まり `:` で区切ったもの）は st がケースとして扱い直し、SRC は既定の checker.cpp / interactor.cpp にする。
@@ -165,17 +165,17 @@ st repro SEED:CAP:NAME [run と同じオプション]
 st make [NAME ...] [-n N] [--seed S] [--cap C] [-o DIR]
 ```
 
-生成器の入力ファイルだけを書き出す。main や愚直解はビルドしない。
+ジェネレーターの入力ファイルだけを書き出す。main や愚直解はビルドしない。
 
 | オプション | 内容 |
 | --- | --- |
-| `NAME ...` | 生成器の名前。省略時は STRESS_BIG のもの、なければ全部 |
-| `-n N` `--count N` | 生成器ごとの個数（既定 5） |
+| `NAME ...` | ジェネレーターの名前。省略時は STRESS_BIG のもの、なければ全部 |
+| `-n N` `--count N` | ジェネレーターごとの個数（既定 5） |
 | `--seed S` | 基準 seed（省略時はランダム） |
 | `--cap C` | cap（省略時は上限なし） |
 | `-o DIR` `--out DIR` | 出力先（既定 `cases/`） |
 
-ファイル名は `<生成器>-01.txt`、`<生成器>-02.txt`、...。同じ名前のファイルは上書きする。ビルドのオプション（`--gen-file`、`--san`、`--cxxflags`、`--gen-tl`）も使える。
+ファイル名は `<ジェネレーター>-01.txt`、`<ジェネレーター>-02.txt`、...。同じ名前のファイルは上書きする。ビルドのオプション（`--gen-file`、`--san`、`--cxxflags`、`--gen-tl`）も使える。
 
 ## st bench
 
@@ -188,7 +188,7 @@ st bench [NAME ...] [-n N] [--seed S] [--cap C] [--tl SEC] [--main SRC]
 | オプション | 内容 |
 | --- | --- |
 | `NAME ...` `--seed S` `--cap C` | `st make` と同じ |
-| `-n N` `--count N` | 生成器ごとの個数（既定 3） |
+| `-n N` `--count N` | ジェネレーターごとの個数（既定 3） |
 | `--tl SEC` | 制限時間（既定 2 秒） |
 | `--output-limit MB` | 出力の上限（既定 64 MB） |
 | `--main SRC` | 解答（既定 main.cpp） |
@@ -222,7 +222,7 @@ st bench [NAME ...] [-n N] [--seed S] [--cap C] [--tl SEC] [--main SRC]
 
 ## in.txt への書き出し
 
-`st run` と `st repro` は、失敗すると入力を問題のディレクトリの in.txt にコピーする。`--no-to-in` を付けるとコピーしない。
+`st run` と `st repro` は失敗すると入力を問題のディレクトリの in.txt にコピーする。`--no-to-in` を付けるとコピーしない。
 
 - st は書き出した in.txt の SHA-1 を `.stress/in.txt.sha1` に残す。
 - コピーの前に in.txt があり、空でなく、中身がそれと違う（手で書いた、書き換えた）ときだけ `.stress/in.txt.bak` に退避する。
@@ -267,7 +267,7 @@ main、愚直解、gen、checker、interactor を並列にビルドする。フ�
 | `--san` | `-fsanitize=address,undefined -fno-omit-frame-pointer -g -D_GLIBCXX_DEBUG` を足す |
 | `--cxxflags "..."` | さらにフラグを足す。環境変数 `STRESS_CXXFLAGS` でもいい（`--cxxflags` が優先）。空白を含む引数もクォートして書ける。`-` で始まるときは `--cxxflags=-O0` や `--cxxflags="-O0 -g"` のように `=` でつなぐ |
 
-- include パスには、stress-test のディレクトリ（`stress/gen.hpp` などを読むため）、ACL（環境変数 `ACL_DIR`、なければ問題のディレクトリの `ac-library/`。`atcoder/` を含むディレクトリを指す）、`$CP_LIBRARY_DIR`（既定 `~/cp-library`）を入れる。
+- include パスには stress-test のディレクトリ（`stress/gen.hpp` などを読むため）、ACL、`$CP_LIBRARY_DIR`（既定 `~/cp-library`）を入れる。ACL は環境変数 `ACL_DIR`、なければ問題のディレクトリの `ac-library/` を使う（`atcoder/` を含むディレクトリを指す）。
 - 問題のディレクトリに `pch_acl.hpp.gch` があり、ソースが `#include <atcoder/...>` を含むときは、`-include pch_acl.hpp` を付けてプリコンパイル済みヘッダを使う。main と愚直解だけで、`--san` のときは使わない。`pch_acl.hpp` 本体が無くフラグ不一致で `.gch` を使えなかったときは、PCH なしで自動でやり直す。
 - バイナリは `.stress/bin/<種類>-<ハッシュ>` に置く。ハッシュはソースのパスとフラグから作るので、`--san` の有無などで別のバイナリになる。
 - ソースか、それが include しているファイルが変わったときだけ再ビルドする。
@@ -278,7 +278,7 @@ main、愚直解、gen、checker、interactor を並列にビルドする。フ�
 
 | パス | 内容 |
 | --- | --- |
-| `fail/<日時>-<判定>-<生成器>-<seed>/` | 保存した失敗。seed は 16 進 |
+| `fail/<日時>-<判定>-<ジェネレーター>-<seed>/` | 保存した失敗。seed は 16 進 |
 | `last` | 直前の失敗へのシンボリックリンク |
 | `run/` | 今走らせているケースの作業場所 |
 | `bench/` | `st bench` で使った入力 |
@@ -296,7 +296,7 @@ main、愚直解、gen、checker、interactor を並列にビルドする。フ�
 | `stderr_checker.txt` `stdout_checker.txt` | checker の出力 |
 | `transcript.txt` `stderr_interactor.txt` | インタラクティブのやり取りと interactor の stderr |
 | `tags.txt` | gen が付けたタグ（`タグ<TAB>回数` を 1 行ずつ）。タグがあるときだけ |
-| `meta.json` | 判定、理由、seed、cap、生成器、タグ、再現コマンド、モード、比較方法、TL、ソースのパスと SHA-1、日時 |
+| `meta.json` | 判定、理由、seed、cap、ジェネレーター、タグ、再現コマンド、モード、比較方法、TL、ソースのパスと SHA-1、日時 |
 
 st が問題のディレクトリの in.txt を書くのは、失敗したとき（`--no-to-in` でなければ）と `st last --to-in`、`st restore` のときだけ。
 

@@ -72,7 +72,7 @@ found after 1 cases (0.0s)
 ## ドキュメント
 
 - [使い方](docs/usage.md): `st` のコマンドとオプション、失敗の保存、ビルドの設定
-- [gen.cpp の書き方](docs/gen.md): 生成器と `stress/gen.hpp` の関数
+- [gen.cpp の書き方](docs/gen.md): ジェネレーターと `stress/gen.hpp` の関数
 - [checker.cpp の書き方](docs/checker.md): スペシャルジャッジと `stress/judge.hpp`
 - [インタラクティブ問題](docs/interactive.md): interactor.cpp と `st -i`
 - [このライブラリのテスト](docs/testing.md): 何を確かめているか、CI、テストしていないもの

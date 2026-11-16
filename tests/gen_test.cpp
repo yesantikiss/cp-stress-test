@@ -360,6 +360,10 @@ static void test_range() {
         CHECK(-3 <= x && x <= 7);
         (void)g.uniform(LLONG_MIN, LLONG_MAX);
     }
+    for (int k = 0; k < 1000; ++k) {
+        double y = g.real(-1e308, 1e308);
+        CHECK(std::isfinite(y) && -1e308 <= y && y <= 1e308);
+    }
     // 端が出やすい
     int hit = 0;
     for (int k = 0; k < 10000; ++k) hit += g.i(0, 1000000000) == 1000000000;
@@ -403,6 +407,15 @@ static void test_decimal() {
     CHECK(g.decimal(-0.05, -0.05, 2) == "-0.05");
     CHECK(g.decimal(7, 7, 0, {.exact = true}) == "7");
     CHECK(g.decimal(0.11, 0.19, 2).size() == 4);  // 0.1 は範囲外なので 2 桁に上がる
+    CHECK(g.decimal(1e10 + 0.1, 1e10 + 0.1, 1) == "10000000000.1");
+    for (int k = 0; k < 200; ++k) {
+        auto pos = g.decimal(1e-9, 0.05, 2);
+        double px = std::stod(pos);
+        CHECK(pos != "0" && 0.01 - 1e-9 <= px && px <= 0.05 + 1e-9);
+        auto neg = g.decimal(-0.05, -1e-9, 2);
+        double nx = std::stod(neg);
+        CHECK(neg != "0" && neg != "-0" && -0.05 - 1e-9 <= nx && nx <= -0.01 + 1e-9);
+    }
 }
 
 // ---------- 配列 ----------
@@ -426,6 +439,14 @@ static void test_distinct_perm_partition() {
         auto r = g.partition(sum + 3 * parts, parts, 3);
         for (ll x : r) CHECK(x >= 3);
     }
+    CHECK(g.distinct(0, 1, 5).empty());
+    auto dw = g.distinct(5, -5000000000000000000LL, 5000000000000000000LL);
+    CHECK((ll)std::set<ll>(dw.begin(), dw.end()).size() == 5);
+    auto df = g.distinct(5, LLONG_MIN, LLONG_MAX);
+    CHECK((ll)std::set<ll>(df.begin(), df.end()).size() == 5);
+    auto dm = g.distinct(5, LLONG_MAX - 10, LLONG_MAX);
+    CHECK((ll)std::set<ll>(dm.begin(), dm.end()).size() == 5);
+    for (ll x : dm) CHECK(LLONG_MAX - 10 <= x);
 }
 
 static void test_sorted() {
@@ -1010,11 +1031,23 @@ static void test_str_others() {
         CHECK(!s.empty());
     }
     CHECK(ss.size() == 5 && tot <= 20);
+    CHECK(g.strs(0, 0, "xy").empty());
     auto t = g.mutate("aaaa", 10, "b");
     CHECK(t.size() == 4);
     auto gr = g.grid(3, 4, ".#");
     CHECK(gr.size() == 3 && gr[0].size() == 4);
     CHECK(g.str(5, [&] { return 'z'; }) == "zzzzz");
+    // 同文字だけが重複した alphabet でも fibonacci / runs が無限ループしない
+    for (auto shape : {StrShape::random, StrShape::periodic, StrShape::palindrome, StrShape::fibonacci, StrShape::runs,
+                       StrShape::mixed}) {
+        CHECK(g.str(0, "aa", {.shape = shape}).empty());
+        CHECK(g.str(20, "aa", {.shape = shape}) == std::string(20, 'a'));
+        CHECK(g.str(20, "aaa", {.shape = shape}) == std::string(20, 'a'));
+    }
+    std::string nul_alpha("\0a", 2);
+    auto rs = g.str(25, nul_alpha, {.shape = StrShape::runs});
+    CHECK(rs.size() == 25);
+    for (char c : rs) CHECK(c == '\0' || c == 'a');
 }
 
 // ---------- 巨大整数 ----------
@@ -1202,22 +1235,40 @@ static void test_gen_errors() {
     auto dies = [](auto f) { return dies_with_gen_error([f] { Gen g(1); f(g); }); };
     // 判定そのものの確認: 正しい指定では止まらない
     CHECK(!dies([](Gen& g) { g.graph(5, 4, {.connected = true}); }));
-    // 範囲
+    // 範囲・サイズ・実数
     CHECK(dies([](Gen& g) { g.uniform(3, 2); }));
     CHECK(dies([](Gen& g) { g.i(3, 2); }));
+    CHECK(dies([](Gen& g) { g.real(2.0, 1.0); }));
+    CHECK(dies([](Gen& g) { g.real(std::numeric_limits<double>::quiet_NaN(), 1.0); }));
+    CHECK(dies([](Gen& g) { g.real(1.0, std::numeric_limits<double>::quiet_NaN()); }));
+    CHECK(dies([](Gen& g) { g.real(-std::numeric_limits<double>::infinity(), 1.0); }));
+    CHECK(dies([](Gen& g) { g.real(0.0, std::numeric_limits<double>::infinity()); }));
+    CHECK(dies([](Gen& g) { g.vec(-1, 1, 5); }));
+    CHECK(dies([](Gen& g) { g.vec(-1, [] { return 0; }); }));
+    CHECK(dies([](Gen& g) { g.seq(-1, 1, 5); }));
     CHECK(dies([](Gen& g) { g.seq(3, 5, 4); }));
+    CHECK(dies([](Gen& g) { g.distinct(-1, 1, 5); }));
     CHECK(dies([](Gen& g) { g.distinct(5, 1, 4); }));
+    CHECK(dies([](Gen& g) { g.distinct(1, 5000000000000000000LL, -5000000000000000000LL); }));
+    CHECK(dies([](Gen& g) { g.perm(-1); }));
     CHECK(dies([](Gen& g) { g.sorted(5, 1, 4, {.strict = true}); }));
     CHECK(dies([](Gen& g) { g.partition(3, 0); }));
     CHECK(dies([](Gen& g) { g.partition(3, 2, 2); }));
+    CHECK(dies([](Gen& g) { g.partition(0, 2, 5000000000000000000LL); }));
+    CHECK(dies([](Gen& g) { g.partition(5000000000000000000LL, 2, -5000000000000000000LL); }));
     CHECK(dies([](Gen& g) { g.decimal(0, 1, 19); }));
     CHECK(dies([](Gen& g) { g.decimal(0.11, 0.19, 1); }));
+    CHECK(dies([](Gen& g) { g.decimal(1e-9, 1e-7, 2); }));
+    CHECK(dies([](Gen& g) { g.decimal(-1e-7, -1e-9, 2); }));
+    CHECK(dies([](Gen& g) { g.decimal(1.0000001, 1.0, 0); }));
+    CHECK(dies([](Gen& g) { g.decimal(std::numeric_limits<double>::quiet_NaN(), 1.0, 1); }));
     CHECK(dies([](Gen& g) { g.choice(std::vector<ll>{}); }));
     // 木
     CHECK(dies([](Gen& g) { g.tree(0); }));
     CHECK(dies([](Gen& g) { g.parents(0); }));
     // 無向グラフ
     CHECK(dies([](Gen& g) { g.graph(0, 0); }));
+    CHECK(dies([](Gen& g) { g.graph(5, -1); }));
     CHECK(dies([](Gen& g) { g.graph(4, 7); }));                       // 単純グラフの最大 6 本を超える
     CHECK(dies([](Gen& g) { g.graph(5, 3, {.connected = true}); }));  // 連結には n-1 本必要
     CHECK(dies([](Gen& g) { g.graph(5, 4, {.shape = GraphShape::pieces, .connected = true}); }));
@@ -1225,18 +1276,21 @@ static void test_gen_errors() {
     CHECK(dies([](Gen& g) { g.graph(5, 7, {.shape = GraphShape::pieces}); }));     // 4+1 に分けても 6 本まで
     CHECK(dies([](Gen& g) { g.graph(5, 7, {.shape = GraphShape::bipartite}); }));  // 2*3 = 6 本まで
     // 有向グラフ
+    CHECK(dies([](Gen& g) { g.digraph(5, -1); }));
     CHECK(dies([](Gen& g) { g.digraph(3, 7); }));
     CHECK(dies([](Gen& g) { g.digraph(5, 4, {.reach = Reach::strong}); }));  // 強連結には m >= n
     CHECK(dies([](Gen& g) { g.digraph(5, 3, {.reach = Reach::root}); }));
     CHECK(dies([](Gen& g) { g.digraph(5, 6, {.shape = DigraphShape::pieces, .reach = Reach::weak}); }));
     CHECK(dies([](Gen& g) { g.digraph(5, 6, {.shape = DigraphShape::dag, .reach = Reach::strong}); }));
     // DAG
+    CHECK(dies([](Gen& g) { g.dag(5, -1); }));
     CHECK(dies([](Gen& g) { g.dag(4, 7); }));
     CHECK(dies([](Gen& g) { g.dag(1, 1, {.simple = false}); }));
     CHECK(dies([](Gen& g) { g.dag(5, 6, {.reach = Reach::strong}); }));
     CHECK(dies([](Gen& g) { g.dag(5, 3, {.reach = Reach::weak}); }));
     // 二部グラフ
     CHECK(dies([](Gen& g) { g.bipartite(0, 0, 0); }));
+    CHECK(dies([](Gen& g) { g.bipartite(2, 3, -1); }));
     CHECK(dies([](Gen& g) { g.bipartite(2, 3, 7); }));
     CHECK(dies([](Gen& g) { g.bipartite(2, 0, 1, {.simple = false}); }));  // 片側が空なら辺はない
     CHECK(dies([](Gen& g) { g.bipartite(2, 3, 3, {.connected = true}); }));
@@ -1244,10 +1298,20 @@ static void test_gen_errors() {
     CHECK(dies([](Gen& g) { g.bipartite(2, 3, 4, {.ordered = true}); }));  // separate では使えない
     CHECK(dies([](Gen& g) { g.bipartite(2, 3, 4, {.label = BipartiteLabel::offset, .ordered = true}); }));
     CHECK(!dies([](Gen& g) { g.bipartite(2, 3, 4, {.label = BipartiteLabel::merged, .ordered = true}); }));
+    CHECK(dies([](Gen& g) { g.bipartite(5, -1); }));
     CHECK(dies([](Gen& g) { g.bipartite(5, 7); }));
     // 文字列と巨大整数
     CHECK(dies([](Gen& g) { g.str(3, ""); }));
+    CHECK(dies([](Gen& g) { g.str(-1, "ab"); }));
+    CHECK(dies([](Gen& g) { g.str(-1, [] { return 'a'; }); }));
+    CHECK(dies([](Gen& g) { g.mutate("abc", -1); }));
+    CHECK(dies([](Gen& g) { g.strs(-1, 0, "ab"); }));
+    CHECK(dies([](Gen& g) { g.strs(0, 0, ""); }));
     CHECK(dies([](Gen& g) { g.strs(5, 4, "ab"); }));
+    CHECK(dies([](Gen& g) { g.grid(-1, 2, ".#"); }));
+    CHECK(dies([](Gen& g) { g.grid(2, -1, ".#"); }));
+    CHECK(dies([](Gen& g) { g.grid(2, 2, ""); }));
+    CHECK(dies([](Gen& g) { g.grid(-1, 2, [] { return '.'; }); }));
     CHECK(dies([](Gen& g) { g.big(0); }));
     CHECK(dies([](Gen& g) { g.big(3, {.digits = "0"}); }));
     CHECK(dies([](Gen& g) { g.big_range("10", "9"); }));

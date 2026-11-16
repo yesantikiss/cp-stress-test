@@ -79,26 +79,32 @@ class Out:
         return Out.c(t, "2")
 
     _status_len = 0
+    _lock = threading.RLock()
 
     @staticmethod
     def status(text: str) -> None:
         if not Out.tty:
             return
-        sys.stderr.write("\r" + text + " " * max(0, Out._status_len - len(text)))
-        sys.stderr.flush()
-        Out._status_len = len(text)
+        with Out._lock:
+            sys.stderr.write("\r" + text + " " * max(0, Out._status_len - len(text)))
+            sys.stderr.flush()
+            Out._status_len = len(text)
 
     @staticmethod
     def clear_status() -> None:
-        if Out.tty and Out._status_len:
-            sys.stderr.write("\r" + " " * Out._status_len + "\r")
-            sys.stderr.flush()
-            Out._status_len = 0
+        if not Out.tty:
+            return
+        with Out._lock:
+            if Out._status_len:
+                sys.stderr.write("\r" + " " * Out._status_len + "\r")
+                sys.stderr.flush()
+                Out._status_len = 0
 
     @staticmethod
     def log(text: str = "") -> None:
-        Out.clear_status()
-        print(text, file=sys.stderr)
+        with Out._lock:
+            Out.clear_status()
+            print(text, file=sys.stderr)
 
 
 def die(msg: str) -> "NoReturn":  # noqa: F821
@@ -177,6 +183,11 @@ def build(cfg: BuildConfig, src: Path, name: str, use_pch: bool = True) -> Path:
         return exe
     cmd = ["g++", *flags, str(src), "-o", str(exe), "-MMD", "-MF", str(dep)]
     proc = subprocess.run(cmd, cwd=cfg.workdir, capture_output=True, text=True)
+    if proc.returncode != 0 and use_pch and "-include" in flags and not (cfg.workdir / "pch_acl.hpp").exists() and "pch_acl.hpp:" in proc.stderr:
+        # pch_acl.hpp 本体が無くフラグ不一致で .gch を使えなかったときは、PCH なしでやり直す
+        no_pch_flags = cfg.flags(src, False)
+        proc = subprocess.run(["g++", *no_pch_flags, str(src), "-o", str(exe), "-MMD", "-MF", str(dep)],
+                              cwd=cfg.workdir, capture_output=True, text=True)
     if proc.returncode != 0:
         Out.log(Out.red(f"build failed: {src.name}"))
         Out.log(proc.stderr.rstrip())
@@ -184,11 +195,41 @@ def build(cfg: BuildConfig, src: Path, name: str, use_pch: bool = True) -> Path:
     return exe
 
 
+def _parse_make_deps(exe: Path, text: str) -> list[str]:
+    text = text.replace("\\\r\n", " ").replace("\\\n", " ")
+    m = re.search(rf"(?:^|[/\\]){re.escape(exe.name)}:(?=\s|$)", text)
+    if m:
+        deps_text = text[m.end():]
+    else:
+        _, _, deps_text = text.partition(":")
+    deps: list[str] = []
+    cur: list[str] = []
+    i = 0
+    n = len(deps_text)
+    while i < n:
+        c = deps_text[i]
+        if c == "\\" and i + 1 < n and deps_text[i + 1] in (" ", "\t", "#", "\\", "$", ":"):
+            cur.append(deps_text[i + 1])
+            i += 2
+        elif c == "$" and i + 1 < n and deps_text[i + 1] == "$":
+            cur.append("$")
+            i += 2
+        elif c in (" ", "\t", "\n", "\r"):
+            if cur:
+                deps.append("".join(cur))
+                cur.clear()
+            i += 1
+        else:
+            cur.append(c)
+            i += 1
+    if cur:
+        deps.append("".join(cur))
+    return deps
+
+
 def _stale(exe: Path, dep: Path) -> bool:
     built = exe.stat().st_mtime
-    text = dep.read_text().replace("\\\n", " ")
-    _, _, deps = text.partition(":")
-    for d in deps.split():
+    for d in _parse_make_deps(exe, dep.read_text(errors="replace")):
         p = Path(d)
         if not p.is_absolute():
             p = exe.parent.parent.parent / p
@@ -311,17 +352,31 @@ def describe_code(code: int) -> str:
 # ---------------------------------------------------------------- 比較
 
 
+def parse_cmp_mode(mode: str) -> tuple[str, float | None]:
+    if mode in ("token", "exact"):
+        return mode, None
+    if mode == "float":
+        return "float", 1e-6
+    if mode.startswith("float:"):
+        raw = mode[6:]
+        try:
+            eps = float(raw)
+        except ValueError:
+            eps = math.nan
+        if not raw or not math.isfinite(eps) or eps < 0:
+            die(f"invalid --cmp float epsilon: {mode!r} (expected non-negative finite number)")
+        return "float", eps
+    die(f"unknown --cmp mode: {mode!r} (expected token, exact, float, or float:EPS)")
+
+
 def compare(a: bytes, b: bytes, mode: str) -> tuple[bool, str]:
-    if mode == "exact":
+    kind, eps = parse_cmp_mode(mode)
+    if kind == "exact":
         if a == b:
             return True, ""
         n = next((k for k in range(min(len(a), len(b))) if a[k] != b[k]), min(len(a), len(b)))
         return False, f"first difference at byte {n}"
     ta, tb = a.split(), b.split()
-    eps = None
-    if mode.startswith("float"):
-        _, _, e = mode.partition(":")
-        eps = float(e) if e else 1e-6
     for k, (x, y) in enumerate(zip(ta, tb)):
         if x == y:
             continue
@@ -508,7 +563,12 @@ class Transcript:
     def note(self, text: str) -> None:
         with self.lock:
             line = f"# {text}"
-            (self.head if len(self.head) < self.HEAD else self.tail).append(line)
+            if len(self.head) < self.HEAD:
+                self.head.append(line)
+                return
+            if len(self.tail) == self.TAIL:
+                self.dropped += 1
+            self.tail.append(line)
 
     def lines(self) -> list[str]:
         mid = [f"... ({self.dropped} lines omitted) ..."] if self.dropped else []
@@ -715,7 +775,11 @@ def judge_flags(opt: argparse.Namespace) -> str:
             continue
         if attr == "cmp" and (opt.checker or getattr(opt, "interactor", None)):
             continue
-        flags += [name, f"{value:g}" if isinstance(value, float) else str(value)]
+        sval = f"{value:g}" if isinstance(value, float) else str(value)
+        if sval.startswith("-"):
+            flags.append(f"{name}={sval}")
+        else:
+            flags += [name, sval]
     if getattr(opt, "san", False):
         flags.append("--san")
     return "".join(" " + shlex.quote(f) for f in flags)
@@ -856,8 +920,12 @@ def find_source(workdir: Path, name: str, what: str) -> Path:
 
 
 def prepare(opt: argparse.Namespace, workdir: Path, need: set[str]) -> tuple[Programs, dict[str, Path]]:
-    cfg = BuildConfig(workdir, sanitize=getattr(opt, "san", False),
-                      extra=opt.cxxflags.split() if getattr(opt, "cxxflags", "") else [])
+    raw_flags = getattr(opt, "cxxflags", "")
+    try:
+        extra = shlex.split(raw_flags) if raw_flags else []
+    except ValueError as e:
+        die(f"invalid --cxxflags: {e}")
+    cfg = BuildConfig(workdir, sanitize=getattr(opt, "san", False), extra=extra)
     sources = {"gen": find_source(workdir, opt.gen_file, "generator")}
     if "main" in need:
         sources["main"] = find_source(workdir, opt.main, "solution")
@@ -904,7 +972,9 @@ def select_gens(progs: Programs, wanted: list[str] | None, big: bool) -> list[st
         if not normal:
             die("st で使える生成器がない（STRESS_BIG 以外の生成器を書くか、-g で指定する）")
         return normal
-    names = [n for w in wanted for n in w.split(",") if n]
+    names = list(dict.fromkeys(n for w in wanted for n in w.split(",") if n))
+    if not names:
+        die(f"no generator specified for -g (available: {', '.join(progs.gens)})")
     unknown = [n for n in names if n not in progs.gens]
     if unknown:
         die(f"unknown generator: {', '.join(unknown)} (available: {', '.join(progs.gens)})")
@@ -927,10 +997,13 @@ def check_mode(opt: argparse.Namespace) -> None:
             die(f"-i と {', '.join(bad)} は一緒に使えない")
     if opt.cmp is None:
         opt.cmp = "token"
+    parse_cmp_mode(opt.cmp)
 
 
 def cmd_run(opt: argparse.Namespace) -> int:
     check_mode(opt)
+    if opt.big_iters < 0:
+        die("--big-iters must be >= 0")
     workdir = Path.cwd()
     progs, sources = prepare(opt, workdir, {"main", "judge"})
     gens = select_gens(progs, opt.gens, big=False)
@@ -953,16 +1026,23 @@ def cmd_run(opt: argparse.Namespace) -> int:
     k = 0
     last_status = 0.0
     done = {n: 0 for n in gens}
-    active = list(gens)
-    while (total is None or k < total) and time.monotonic() < deadline:
+    active = [n for n in gens if not (n in limited and big_limit == 0)]
+    if not active:
+        total = 0
+    pos = 0
+    while active and (total is None or k < total) and time.monotonic() < deadline:
         # 生成器は順番に回し、cap は生成器ごとに小さい方から増やす
-        name = active[k % len(active)]
+        name = active[pos]
         case = Case(case_seed(base, k), cap_for(done[name], opt.max_cap), name)
         done[name] += 1
         if name in limited and done[name] >= big_limit:
-            active.remove(name)
-            if not active:
+            active.pop(pos)
+            if active:
+                pos %= len(active)
+            else:
                 total = k + 1
+        else:
+            pos = (pos + 1) % len(active)
         v = run_case(progs, case, run_dir, opt)
         slowest = max(slowest, v.elapsed)
         if v.queries and (most_queries is None or v.queries[0] > most_queries[0]):
@@ -1204,6 +1284,23 @@ def parse(argv: list[str]) -> argparse.Namespace:
     commands = {"run", "repro", "make", "bench", "last", "restore", "clean", "init"}
     if not argv or argv[0] not in commands:
         argv = ["run", *argv]
+    st_short = ("-h", "-c", "-i", "-g", "-n", "-t", "-o")
+    norm: list[str] = []
+    idx = 0
+    while idx < len(argv):
+        tok = argv[idx]
+        if tok == "--":
+            norm.extend(argv[idx:])
+            break
+        if tok == "--cxxflags" and idx + 1 < len(argv):
+            nxt = argv[idx + 1]
+            if not nxt.startswith("-") or (not nxt.startswith("--") and not nxt.startswith(st_short)):
+                norm.append(f"--cxxflags={nxt}")
+                idx += 2
+                continue
+        norm.append(tok)
+        idx += 1
+    argv = norm
 
     ap = argparse.ArgumentParser(prog="st", description="ランダムテストのドライバ")
     sub = ap.add_subparsers(dest="command", required=True)

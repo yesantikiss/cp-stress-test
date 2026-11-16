@@ -69,6 +69,15 @@ check cmp_float_ok 0 st --main main_float.cpp --cmp float:1e-6 -n 200 --seed 1
 check cmp_float_wa 1 st --main main_float.cpp --cmp float:1e-12 --seed 1
 kind_is cmp_float_wa WA
 check cmp_token_float 1 st --main main_float.cpp --seed 1
+check cmp_float_zero_wa 1 st --main main_float.cpp --cmp float:0 --seed 1
+kind_is cmp_float_zero_wa WA
+check cmp_float_zero_ok 0 st --main main_ok.cpp --cmp float:0 -n 10 --seed 1
+for bad_cmp in foo floating "float:" float:abc float:-1e-6 float:nan float:inf; do
+    safe_tag="$(printf '%s' "$bad_cmp" | tr -c 'a-zA-Z0-9_' '_')"
+    check "cmp_bad_${safe_tag}" 2 st --main main_ok.cpp --cmp "$bad_cmp"
+done
+check cxxflags_bad 2 st --main main_ok.cpp --cxxflags '-DFOO="abc'
+log_has cxxflags_bad_msg cxxflags_bad 'invalid --cxxflags'
 
 # 表示された st repro をそのまま打てば再現する（--main / --cmp / --tl も付く）
 st --main main_ok.cpp --cmp exact --tl 1.5 --seed 1 >/dev/null 2>&1
@@ -78,6 +87,13 @@ case "$repro_cmd" in
     *) echo "FAIL repro_cmd_flags ($repro_cmd)"; fail=1 ;;
 esac
 check repro_cmd_reproduces 1 st ${repro_cmd#st }
+st --main main_ok.cpp --cmp exact --cxxflags -O0 --seed 1 --no-to-in >/dev/null 2>&1
+repro_cmd_cxx="$(python3 -c 'import json;print(json.load(open(".stress/last/meta.json"))["repro"])')"
+case "$repro_cmd_cxx" in
+    *"--cxxflags=-O0"*) echo "ok   repro_cmd_cxxflags" ;;
+    *) echo "FAIL repro_cmd_cxxflags ($repro_cmd_cxx)"; fail=1 ;;
+esac
+check repro_cmd_cxxflags_reproduces 1 st ${repro_cmd_cxx#st }
 
 # repro: 直前の失敗の seed:cap で同じ入力が出る
 st --main main_wa.cpp --seed 7 >/dev/null 2>&1
@@ -156,6 +172,12 @@ check multi_big_mixed   0 st --main main_ok.cpp -g random,max --seed 1 --big-ite
 grep -q 'OK  1000 cases' "$build_dir/multi_big_mixed.log" && echo "ok   multi_big_mixed_1000" || { echo "FAIL multi_big_mixed_1000"; fail=1; }
 check multi_big_n       0 st --main main_ok.cpp -g max --seed 1 -n 25
 grep -q 'OK  25 cases' "$build_dir/multi_big_n.log" && echo "ok   multi_big_explicit_n" || { echo "FAIL multi_big_explicit_n"; fail=1; }
+check multi_gen_dedup   0 st --main main_ok.cpp -g max -g max --seed 1
+grep -q 'OK  20 cases' "$build_dir/multi_gen_dedup.log" && echo "ok   multi_gen_dedup_20" || { echo "FAIL multi_gen_dedup_20"; fail=1; }
+check multi_gen_empty   2 st --main main_ok.cpp -g ,
+check multi_big_zero    0 st --main main_ok.cpp -g max --big-iters 0 --seed 1
+grep -q 'OK  0 cases' "$build_dir/multi_big_zero.log" && echo "ok   multi_big_zero_0" || { echo "FAIL multi_big_zero_0"; fail=1; }
+check multi_big_neg     2 st --main main_ok.cpp -g max --big-iters -1
 check make              0 st make max all_same -n 2 --seed 3 -o cases
 if [ "$(ls cases | wc -l)" -eq 4 ]; then echo "ok   make_files"; else echo "FAIL make_files"; fail=1; fi
 check bench_ok          0 st bench --main main_ok.cpp -n 1 --seed 3
@@ -204,5 +226,122 @@ for ex in lis subset_sum sqrt; do
     ref=(); [ "$ex" != sqrt ] && ref=(--ref)
     check "example_checker_$ex" 0 st -c checker.cpp "${ref[@]}" -n 100 --seed 1
 done
+
+# STRESS_BIG の寿命が尽きたときに次の生成器を飛ばさず順番に回す
+work_rr="$build_dir/roundrobin"
+rm -rf "$work_rr" && mkdir -p "$work_rr" && cd "$work_rr"
+cat > gen.cpp << 'EOF'
+#include "stress/gen.hpp"
+STRESS_GEN(a) { g.out("a"); }
+STRESS_BIG(b) { g.out("b"); }
+STRESS_GEN(c) { g.out("c"); }
+EOF
+cat > guchoku.cpp << 'EOF'
+#include <iostream>
+int main() { std::cout << "ok\n"; }
+EOF
+cat > main.cpp << 'EOF'
+#include <iostream>
+#include <string>
+int main() { std::string s; std::cin >> s; std::cout << (s == "c" ? "bad\n" : "ok\n"); }
+EOF
+check rr_no_skip 1 st -g a,b,c --big-iters 1 --seed 1 --no-to-in
+kind_is rr_no_skip WA
+log_has rr_found_after_3 rr_no_skip '^found after 3 cases'
+if [ "$(python3 -c 'import json;print(json.load(open(".stress/last/meta.json"))["gen"])')" = "c" ]; then
+    echo "ok   rr_gen_c"
+else
+    echo "FAIL rr_gen_c"; fail=1
+fi
+
+# 空白や特殊文字を含むインクルード先（--cxxflags のクォート、.d 依存のキャッシュと更新検知）
+work_d="$build_dir/deps_cache"
+rm -rf "$work_d" && mkdir -p "$work_d/inc dir:2" && cd "$work_d"
+cat > gen.cpp << 'EOF'
+#include "stress/gen.hpp"
+void gen(Gen& g) { g.out(1); (void)g; }
+EOF
+cat > guchoku.cpp << 'EOF'
+#include <iostream>
+int main() { std::cout << "1\n"; }
+EOF
+cat > main.cpp << 'EOF'
+#include <iostream>
+#include "val#1$x.hpp"
+int main() { int x; std::cin >> x; std::cout << VAL << '\n'; }
+EOF
+printf 'constexpr int VAL = 1;\n' > "$work_d/inc dir:2/val#1\$x.hpp"
+python3 - "$work_d" << 'PY'
+import os, sys, time
+root = sys.argv[1]
+t = time.time() - 20
+for rel in ("gen.cpp", "guchoku.cpp", "main.cpp", "inc dir:2/val#1$x.hpp"):
+    os.utime(os.path.join(root, rel), (t, t))
+PY
+inc_flag="-I'$work_d/inc dir:2'"
+check deps_cxxflags_space_ok 0 st -n 1 --seed 1 --cxxflags "$inc_flag"
+mtime1="$(python3 -c 'import glob,os;p=[x for x in glob.glob(".stress/bin/main-*") if not x.endswith(".d")];print(os.stat(p[0]).st_mtime_ns)')"
+check deps_cache_hit 0 st -n 1 --seed 1 --cxxflags "$inc_flag"
+mtime2="$(python3 -c 'import glob,os;p=[x for x in glob.glob(".stress/bin/main-*") if not x.endswith(".d")];print(os.stat(p[0]).st_mtime_ns)')"
+if [ -n "$mtime1" ] && [ "$mtime1" = "$mtime2" ]; then echo "ok   deps_cache_no_rebuild"; else echo "FAIL deps_cache_no_rebuild ($mtime1 vs $mtime2)"; fail=1; fi
+printf 'constexpr int VAL = 2;\n' > "$work_d/inc dir:2/val#1\$x.hpp"
+python3 - "$work_d/inc dir:2/val#1\$x.hpp" << 'PY'
+import os, sys, time
+t = time.time() + 10
+os.utime(sys.argv[1], (t, t))
+PY
+check deps_stale_rebuild 1 st -n 1 --seed 1 --cxxflags "$inc_flag" --no-to-in
+kind_is deps_stale_rebuild WA
+
+# stress.py 内のヘルパ単体チェック（_parse_make_deps / Transcript.note）
+check py_helpers 0 python3 -B - "$root" << 'PY'
+import importlib.util, sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("stress_mod", root / "stress.py")
+mod = importlib.util.module_from_spec(spec)
+sys.modules["stress_mod"] = mod
+spec.loader.exec_module(mod)
+
+exe = Path("/tmp/sub:dir/main-12345678")
+dep = "/tmp/sub:dir/main-12345678: main.cpp \\\r\n /tmp/inc\\ dir/a:b/h\\#1$$2\\\\x.hpp\n"
+parsed = mod._parse_make_deps(exe, dep)
+assert parsed == ["main.cpp", r"/tmp/inc dir/a:b/h#1$2\x.hpp"], parsed
+
+tr = mod.Transcript()
+for i in range(tr.HEAD + tr.TAIL + 3):
+    tr.note(f"line-{i}")
+assert tr.dropped == 3, tr.dropped
+assert any("3 lines omitted" in ln for ln in tr.lines())
+PY
+
+# pch_acl.hpp 本体が無くても .gch だけで動き、フラグ不一致なら PCH なしでやり直す
+work_p="$build_dir/pch"
+rm -rf "$work_p" && mkdir -p "$work_p/ac-library/atcoder" && cd "$work_p"
+cat > ac-library/atcoder/dummy.hpp << 'EOF'
+#pragma once
+inline int dummy_val() { return 1; }
+EOF
+cat > pch_acl.hpp << 'EOF'
+#include <atcoder/dummy.hpp>
+EOF
+cat > gen.cpp << 'EOF'
+#include "stress/gen.hpp"
+void gen(Gen& g) { g.out(1); (void)g; }
+EOF
+cat > guchoku.cpp << 'EOF'
+#include <iostream>
+int main() { std::cout << "1\n"; }
+EOF
+cat > main.cpp << 'EOF'
+#include <iostream>
+#include <atcoder/dummy.hpp>
+int main() { int x; std::cin >> x; std::cout << dummy_val() << '\n'; }
+EOF
+g++ -std=gnu++20 -O2 -DLOCAL -Iac-library -x c++-header pch_acl.hpp -o pch_acl.hpp.gch
+rm pch_acl.hpp
+check pch_match 0 env ACL_DIR="$work_p/ac-library" CP_LIBRARY_DIR="$work_p/no_lib" python3 "$root/stress.py" -n 2 --seed 1
+check pch_mismatch_fallback 0 env ACL_DIR="$work_p/ac-library" CP_LIBRARY_DIR="$work_p/no_lib" python3 "$root/stress.py" -n 2 --seed 1 --cxxflags -O0
 
 [ "$fail" -eq 0 ] && echo "All tests passed" || { echo "Some tests failed"; exit 1; }

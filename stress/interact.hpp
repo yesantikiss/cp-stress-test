@@ -47,9 +47,12 @@ class Interactor {
     Interactor(int argc, char** argv) {
         if (argc < 2) judge_exit(kJudgeFail, std::string("usage: ") + argv[0] + " <input>");
         std::signal(SIGPIPE, SIG_IGN);  // main が先に終わっても、書き込みエラーとして扱う
+        queries_ = 0;
+        limit_ = -1;
         in = Reader(argv[1], "input", kJudgeFail);
         out = Reader::stream(0, "output", kWrong);
-        std::atexit(&Interactor::report);
+        static bool registered = (std::atexit(&Interactor::report) == 0);
+        (void)registered;
     }
     Interactor(const Interactor&) = delete;
     Interactor& operator=(const Interactor&) = delete;

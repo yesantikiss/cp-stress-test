@@ -3,8 +3,11 @@
 #include "stress/adaptive.hpp"
 #include "tests/check.hpp"
 
+#include <fcntl.h>
 #include <numeric>
 #include <set>
+#include <sys/wait.h>
+#include <unistd.h>
 
 using namespace stress;
 
@@ -40,6 +43,19 @@ static void test_trees() {  // 木の個数（n^(n-2)）と、どれも木にな
             }
         }
     }
+    // kMaxCandidates (10^7) を超える n = 10 では interactor 失敗（終了コード 3）になる
+    std::fflush(stdout);
+    std::fflush(stderr);
+    const pid_t pid = fork();
+    if (pid == 0) {
+        const int fd = open("/dev/null", O_WRONLY);
+        dup2(fd, 2);
+        cand::trees(10);
+        _exit(0);
+    }
+    int status = 0;
+    waitpid(pid, &status, 0);
+    CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 3);
 }
 
 static void test_binary_search() {  // 一番多く残る返事を選ぶので、二分探索でちょうど ceil(log2 n) 回かかる

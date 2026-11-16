@@ -76,8 +76,9 @@ for bad_cmp in foo floating "float:" float:abc float:-1e-6 float:nan float:inf; 
     safe_tag="$(printf '%s' "$bad_cmp" | tr -c 'a-zA-Z0-9_' '_')"
     check "cmp_bad_${safe_tag}" 2 st --main main_ok.cpp --cmp "$bad_cmp"
 done
-check cxxflags_bad 2 st --main main_ok.cpp --cxxflags '-DFOO="abc'
+check cxxflags_bad 2 st --main main_ok.cpp --cxxflags='-DFOO="abc'
 log_has cxxflags_bad_msg cxxflags_bad 'invalid --cxxflags'
+check cxxflags_eq_short 0 st --main main_ok.cpp -n 3 --seed 1 --cxxflags=-g3
 
 # 表示された st repro をそのまま打てば再現する（--main / --cmp / --tl も付く）
 st --main main_ok.cpp --cmp exact --tl 1.5 --seed 1 >/dev/null 2>&1
@@ -87,7 +88,7 @@ case "$repro_cmd" in
     *) echo "FAIL repro_cmd_flags ($repro_cmd)"; fail=1 ;;
 esac
 check repro_cmd_reproduces 1 st ${repro_cmd#st }
-st --main main_ok.cpp --cmp exact --cxxflags -O0 --seed 1 --no-to-in >/dev/null 2>&1
+st --main main_ok.cpp --cmp exact --cxxflags=-O0 --seed 1 --no-to-in >/dev/null 2>&1
 repro_cmd_cxx="$(python3 -c 'import json;print(json.load(open(".stress/last/meta.json"))["repro"])')"
 case "$repro_cmd_cxx" in
     *"--cxxflags=-O0"*) echo "ok   repro_cmd_cxxflags" ;;
@@ -342,6 +343,6 @@ EOF
 g++ -std=gnu++20 -O2 -DLOCAL -Iac-library -x c++-header pch_acl.hpp -o pch_acl.hpp.gch
 rm pch_acl.hpp
 check pch_match 0 env ACL_DIR="$work_p/ac-library" CP_LIBRARY_DIR="$work_p/no_lib" python3 "$root/stress.py" -n 2 --seed 1
-check pch_mismatch_fallback 0 env ACL_DIR="$work_p/ac-library" CP_LIBRARY_DIR="$work_p/no_lib" python3 "$root/stress.py" -n 2 --seed 1 --cxxflags -O0
+check pch_mismatch_fallback 0 env ACL_DIR="$work_p/ac-library" CP_LIBRARY_DIR="$work_p/no_lib" python3 "$root/stress.py" -n 2 --seed 1 --cxxflags=-O0
 
 [ "$fail" -eq 0 ] && echo "All tests passed" || { echo "Some tests failed"; exit 1; }

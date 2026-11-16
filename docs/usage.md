@@ -265,7 +265,7 @@ main、愚直解、gen、checker、interactor を並列にビルドする。フ�
 | オプション | 内容 |
 | --- | --- |
 | `--san` | `-fsanitize=address,undefined -fno-omit-frame-pointer -g -D_GLIBCXX_DEBUG` を足す |
-| `--cxxflags "..."` | さらにフラグを足す。環境変数 `STRESS_CXXFLAGS` でもいい（`--cxxflags` が優先）。空白を含む引数もクォートして書ける（`-g` のように st と重なる短いフラグ単体は `--cxxflags=-g`） |
+| `--cxxflags "..."` | さらにフラグを足す。環境変数 `STRESS_CXXFLAGS` でもいい（`--cxxflags` が優先）。空白を含む引数もクォートして書ける。`-` で始まるときは `--cxxflags=-O0` や `--cxxflags="-O0 -g"` のように `=` でつなぐ |
 
 - include パスには、stress-test のディレクトリ（`stress/gen.hpp` などを読むため）、ACL（環境変数 `ACL_DIR`、なければ問題のディレクトリの `ac-library/`。`atcoder/` を含むディレクトリを指す）、`$CP_LIBRARY_DIR`（既定 `~/cp-library`）を入れる。
 - 問題のディレクトリに `pch_acl.hpp.gch` があり、ソースが `#include <atcoder/...>` を含むときは、`-include pch_acl.hpp` を付けてプリコンパイル済みヘッダを使う。main と愚直解だけで、`--san` のときは使わない。`pch_acl.hpp` 本体が無くフラグ不一致で `.gch` を使えなかったときは、PCH なしで自動でやり直す。

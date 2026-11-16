@@ -61,7 +61,7 @@ class StringOps {
 
     // k 個の文字列（各長さ 1 以上、長さの総和は total 以下）。
     std::vector<std::string> strs(ll k, ll total, std::string_view alphabet, StrOpt opt = {}) {
-        if (alphabet.empty()) gen_error("str: empty alphabet");
+        if (alphabet.empty()) gen_error("strs: empty alphabet");
         if (k < 0) gen_error("strs: k must be >= 0");
         if (total < k) gen_error("strs: total must be >= k");
         if (k == 0) return {};

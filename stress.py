@@ -1284,23 +1284,6 @@ def parse(argv: list[str]) -> argparse.Namespace:
     commands = {"run", "repro", "make", "bench", "last", "restore", "clean", "init"}
     if not argv or argv[0] not in commands:
         argv = ["run", *argv]
-    st_short = ("-h", "-c", "-i", "-g", "-n", "-t", "-o")
-    norm: list[str] = []
-    idx = 0
-    while idx < len(argv):
-        tok = argv[idx]
-        if tok == "--":
-            norm.extend(argv[idx:])
-            break
-        if tok == "--cxxflags" and idx + 1 < len(argv):
-            nxt = argv[idx + 1]
-            if not nxt.startswith("-") or (not nxt.startswith("--") and not nxt.startswith(st_short)):
-                norm.append(f"--cxxflags={nxt}")
-                idx += 2
-                continue
-        norm.append(tok)
-        idx += 1
-    argv = norm
 
     ap = argparse.ArgumentParser(prog="st", description="ランダムテストのドライバ")
     sub = ap.add_subparsers(dest="command", required=True)

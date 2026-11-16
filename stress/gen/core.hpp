@@ -129,11 +129,7 @@ class Core {
         if (!(lo <= hi)) gen_error("decimal: lo > hi");
         ll scale = 1;
         for (ll t = 0; t < d; ++t) scale *= 10;
-        const long double sl = static_cast<long double>(lo) * scale, sh = static_cast<long double>(hi) * scale;
-        constexpr long double lim = 9.0e18L;
-        if (!(-lim < sl && sl < lim && -lim < sh && sh < lim))
-            gen_error("decimal: |lo|, |hi| times 10^d must be below 9e18");
-        const ll L = round_scaled(sl, true), H = round_scaled(sh, false);
+        const ll L = scaled_bound(lo, d, true), H = scaled_bound(hi, d, false);
         if (L > H) gen_error("decimal: no value with " + std::to_string(d) + " decimals in [lo, hi]");
         ll v;
         if (opt.exact) {
@@ -210,12 +206,33 @@ class Core {
   private:
     static ll floor_div(ll a, ll b) { return a / b - ((a % b != 0) && ((a < 0) != (b < 0))); }
     static ll ceil_div(ll a, ll b) { return -floor_div(-a, b); }
-    // x * 10^d を整数にする。誤差で 2.9999999 になった 3 は 3 として扱う。
-    static ll round_scaled(long double x, bool up) {
-        const long double r = std::round(x);
-        const long double tol = std::min(1e-4L, std::fabs(r) * 1e-12L);
-        if (std::fabs(x - r) <= tol) return static_cast<ll>(r);
-        return static_cast<ll>(up ? std::ceil(x) : std::floor(x));
+    // decimal 用。x を最短の 10 進表記（読み戻すと同じ double になる最短の表記）で読み、
+    // 10^d 倍した整数を返す。小数点以下が d 桁に収まらなければ内側に丸める（up なら切り上げ）。
+    // double の 0.1 は 0.1000000000000000055… だが、最短表記は "0.1" なので 0.1 として扱う。
+    static ll scaled_bound(double x, ll d, bool up) {
+        constexpr ll lim = 9'000'000'000'000'000'000LL;
+        const char* msg = "decimal: |lo|, |hi| times 10^d must be below 9e18";
+        if (!std::isfinite(x)) gen_error("decimal: lo, hi must be finite");
+        if (std::fabs(x) >= 1e19) gen_error(msg);
+        char buf[400];
+        const auto res = std::to_chars(buf, buf + sizeof(buf), x, std::chars_format::fixed);
+        const std::string_view s(buf, static_cast<std::size_t>(res.ptr - buf));
+        const bool neg = !s.empty() && s[0] == '-';
+        const std::size_t dot = s.find('.');
+        const std::string_view ip = s.substr(neg, dot == std::string_view::npos ? std::string_view::npos : dot - neg);
+        const std::string_view fp = dot == std::string_view::npos ? std::string_view{} : s.substr(dot + 1);
+        __int128 t = 0;  // |x| * 10^d を 0 に向かって切り捨てたもの
+        for (char c : ip) t = t * 10 + (c - '0');
+        bool rest = false;  // 切り捨てた桁に 0 でないものがあるか
+        for (std::size_t k = 0; k < static_cast<std::size_t>(d) || k < fp.size(); ++k) {
+            const char c = k < fp.size() ? fp[k] : '0';
+            if (k < static_cast<std::size_t>(d)) t = t * 10 + (c - '0');
+            else if (c != '0') rest = true;
+        }
+        if (t >= lim) gen_error(msg);
+        ll v = static_cast<ll>(neg ? -t : t);
+        if (rest && up != neg) v += neg ? -1 : 1;  // 切り捨ては 0 向きなので、外向きの側だけ 1 動かす
+        return v;
     }
     std::uint64_t s_[4];
     ll cap_;

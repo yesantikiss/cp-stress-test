@@ -420,6 +420,45 @@ static void test_decimal() {
 
 // ---------- 配列 ----------
 
+// d が大きいときも、gen.cpp に書いた値はそのまま使われるか（最短表記で読む）。
+static void test_decimal_large_d() {
+    Gen g(3);
+    const char* lits[] = {"0.1", "0.3", "0.7", "1.1", "2.675", "123.456", "-0.3", "-123.456", "0.001",
+                          "0.0000005", "10000000000.1", "9.87654321", "8.999999999999998", "0.30000000000000004",
+                          "7", "-7", "0", "1000000"};
+    for (const char* lit : lits) {
+        const std::string s = lit;
+        const double x = std::strtod(lit, nullptr);
+        const auto p = s.find('.');
+        const ll dec = p == std::string::npos ? 0 : (ll)(s.size() - p - 1);
+        for (ll d = dec; d <= 18; ++d) {
+            if (std::fabs((long double)x) * std::pow(10.0L, (long double)d) >= 9e18L) continue;  // 範囲外は対象外
+            std::string want = s;
+            if (d > dec) want += (dec == 0 ? "." : "") + std::string(d - dec, '0');
+            const auto e = g.decimal(x, x, d, {.exact = true});
+            CHECK(e == want);
+            if (e != want) std::fprintf(stderr, "  decimal(%s, %s, %lld, exact) = %s\n", lit, lit, d, e.c_str());
+            CHECK(g.decimal(x, x, d) == s);
+        }
+    }
+    // 小数点以下が d 桁に収まらない値は内側に丸める
+    CHECK(g.decimal(0.12345678901234, 0.12345678901246, 13, {.exact = true}) == "0.1234567890124");
+    CHECK(g.decimal(-0.12345678901246, -0.12345678901234, 13, {.exact = true}) == "-0.1234567890124");
+    CHECK(g.decimal(0.15, 0.25, 1, {.exact = true}) == "0.2");
+    CHECK(g.decimal(-0.25, -0.15, 1, {.exact = true}) == "-0.2");
+    // 計算結果は誤差込みの値として扱う。0.1 + 0.2 は 0.30000000000000004
+    CHECK(g.decimal(0.1 + 0.2, 0.31, 2, {.exact = true}) == "0.31");    // lo は切り上がる
+    CHECK(g.decimal(0.3, 0.1 + 0.2, 2, {.exact = true}) == "0.30");    // hi は切り捨てで 0.30
+    CHECK(g.decimal(0.1 + 0.2, 0.1 + 0.2, 17) == "0.30000000000000004");
+    // 範囲の値がすべて出るか（d が大きくても範囲が正しく取れているか）
+    std::set<std::string> seen;
+    for (int k = 0; k < 400; ++k) seen.insert(g.decimal(0.3, 0.300000000000003, 15, {.exact = true}));
+    CHECK(seen == std::set<std::string>({"0.300000000000000", "0.300000000000001", "0.300000000000002",
+                                         "0.300000000000003"}));
+    // -0.0 は 0
+    CHECK(g.decimal(-0.0, -0.0, 3) == "0");
+}
+
 static void test_distinct_perm_partition() {
     Gen g(3);
     for (int k = 0; k < 200; ++k) {
@@ -1262,6 +1301,12 @@ static void test_gen_errors() {
     CHECK(dies([](Gen& g) { g.decimal(-1e-7, -1e-9, 2); }));
     CHECK(dies([](Gen& g) { g.decimal(1.0000001, 1.0, 0); }));
     CHECK(dies([](Gen& g) { g.decimal(std::numeric_limits<double>::quiet_NaN(), 1.0, 1); }));
+    CHECK(dies([](Gen& g) { g.decimal(0, std::numeric_limits<double>::infinity(), 1); }));
+    CHECK(dies([](Gen& g) { g.decimal(-std::numeric_limits<double>::infinity(), 0, 1); }));
+    CHECK(dies([](Gen& g) { g.decimal(9.0, 9.0, 18); }));    // 9 * 10^18 は 9e18 未満でない
+    CHECK(dies([](Gen& g) { g.decimal(-9.0, 0, 18); }));
+    CHECK(dies([](Gen& g) { g.decimal(0, 1e300, 0); }));
+    CHECK(dies([](Gen& g) { g.decimal(0.1 + 0.2, 0.3, 2); }));  // lo が 0.31 に切り上がって範囲が空
     CHECK(dies([](Gen& g) { g.choice(std::vector<ll>{}); }));
     // 木
     CHECK(dies([](Gen& g) { g.tree(0); }));
@@ -1332,6 +1377,7 @@ int main(int argc, char** argv) {
                                   {"range", test_range},
                                   {"size_cap", test_size_cap},
                                   {"decimal", test_decimal},
+                                  {"decimal_large_d", test_decimal_large_d},
                                   {"distinct_perm_partition", test_distinct_perm_partition},
                                   {"sorted", test_sorted},
                                   {"seq_shapes", test_seq_shapes},

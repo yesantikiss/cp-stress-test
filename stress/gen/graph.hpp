@@ -190,10 +190,15 @@ class GraphOps {
     // ランダムなトポ順の上で、前から後ろへの辺だけを張る。
     Edges dag(ll n, ll m, DagOpt opt = {}) {
         if (n <= 0) gen_error("dag: n must be positive");
-        const ll max_edges = n * (n - 1) / 2;
-        if (m > max_edges && (opt.simple || n == 1))
-            gen_error("dag: m=" + std::to_string(m) + " exceeds the maximum " + std::to_string(max_edges) +
+        if (m < 0) gen_error("dag: m must be >= 0");
+        const __int128 max_edges128 = static_cast<__int128>(n) * (n - 1) / 2;
+        if (static_cast<__int128>(m) > max_edges128 && (opt.simple || n == 1))
+            gen_error("dag: m=" + std::to_string(m) + " exceeds the maximum " +
+                      u128_str(static_cast<unsigned __int128>(max_edges128)) +
                       (opt.simple ? " for a simple DAG" : " (n=1 has no edges)"));
+        const ll max_edges = max_edges128 > std::numeric_limits<ll>::max()
+                                 ? std::numeric_limits<ll>::max()
+                                 : static_cast<ll>(max_edges128);
         if (opt.reach == Reach::strong) gen_error("dag: a DAG can't be strongly connected");
         const bool root = opt.reach == Reach::root, connected = opt.reach != Reach::none;
         if (connected && m < n - 1) gen_error("dag: connected DAG needs m >= n-1");
@@ -224,13 +229,18 @@ class GraphOps {
     // offset なら右は n1+1..n1+n2。
     Edges bipartite(ll n1, ll n2, ll m, BipartiteOpt opt = {}) {
         if (n1 < 0 || n2 < 0 || n1 + n2 <= 0) gen_error("bipartite: n1, n2 must be >= 0 and n1+n2 > 0");
+        if (m < 0) gen_error("bipartite: m must be >= 0");
         if (opt.ordered && opt.label != BipartiteLabel::merged)
             gen_error("bipartite: .ordered needs .label = BipartiteLabel::merged "
                       "(separate keeps u on the left, offset is always u < v)");
-        const ll max_edges = n1 * n2;
-        if (m > max_edges && (opt.simple || max_edges == 0))
-            gen_error("bipartite: m=" + std::to_string(m) + " exceeds the maximum " + std::to_string(max_edges) +
+        const __int128 max_edges128 = static_cast<__int128>(n1) * n2;
+        if (static_cast<__int128>(m) > max_edges128 && (opt.simple || max_edges128 == 0))
+            gen_error("bipartite: m=" + std::to_string(m) + " exceeds the maximum " +
+                      u128_str(static_cast<unsigned __int128>(max_edges128)) +
                       (opt.simple ? " for a simple bipartite graph" : " (one side is empty)"));
+        const ll max_edges = max_edges128 > std::numeric_limits<ll>::max()
+                                 ? std::numeric_limits<ll>::max()
+                                 : static_cast<ll>(max_edges128);
         if (opt.connected && m < n1 + n2 - 1) gen_error("bipartite: connected graph needs m >= n1+n2-1");
         if (opt.connected && n1 + n2 >= 2 && (n1 == 0 || n2 == 0))
             gen_error("bipartite: connected graph needs both sides non-empty");
@@ -286,17 +296,19 @@ class GraphOps {
     // 総頂点数 n だけ指定する二部グラフ。左右の分け方はランダムで、頂点番号は通し (1..n) になる。
     Edges bipartite(ll n, ll m, BipartiteOpt opt = {}) {
         if (n <= 0) gen_error("bipartite: n must be positive");
+        if (m < 0) gen_error("bipartite: m must be >= 0");
         if (n == 1) {
             opt.label = BipartiteLabel::merged;
             return bipartite(1, 0, m, opt);
         }
         std::vector<ll> ok;  // m 本入る左の大きさ
         for (ll n1 = 1; n1 < n; ++n1)
-            if (n1 * (n - n1) >= m || !opt.simple) ok.push_back(n1);
-        if (ok.empty())
-            gen_error("bipartite: m=" + std::to_string(m) + " exceeds the maximum " +
-                      std::to_string((n / 2) * (n - n / 2)) + " for a simple bipartite graph with n=" +
-                      std::to_string(n));
+            if (static_cast<__int128>(n1) * (n - n1) >= m || !opt.simple) ok.push_back(n1);
+        if (ok.empty()) {
+            const unsigned __int128 max_bi = static_cast<unsigned __int128>(n / 2) * (n - n / 2);
+            gen_error("bipartite: m=" + std::to_string(m) + " exceeds the maximum " + u128_str(max_bi) +
+                      " for a simple bipartite graph with n=" + std::to_string(n));
+        }
         const ll n1 = self().choice(ok);
         opt.label = BipartiteLabel::merged;
         return bipartite(n1, n - n1, m, opt);
@@ -304,6 +316,14 @@ class GraphOps {
 
   private:
     using RawEdges = std::vector<std::pair<ll, ll>>;
+
+    static std::string u128_str(unsigned __int128 x) {
+        if (x == 0) return "0";
+        std::string s;
+        while (x > 0) s.push_back(static_cast<char>('0' + x % 10)), x /= 10;
+        std::reverse(s.begin(), s.end());
+        return s;
+    }
 
     // graph / digraph の形の共通の指定。
     struct Spec {
@@ -319,10 +339,12 @@ class GraphOps {
 
     void check_graph(ll n, ll m, const Spec& sp) {
         const std::string name = sp.name;
-        const ll max_edges = sp.directed ? n * (n - 1) : n * (n - 1) / 2;
-        if (sp.simple && m > max_edges)
-            gen_error(name + ": m=" + std::to_string(m) + " exceeds the maximum " + std::to_string(max_edges) +
-                      " for a simple graph");
+        if (m < 0) gen_error(name + ": m must be >= 0");
+        const __int128 max_edges =
+            sp.directed ? static_cast<__int128>(n) * (n - 1) : static_cast<__int128>(n) * (n - 1) / 2;
+        if (sp.simple && static_cast<__int128>(m) > max_edges)
+            gen_error(name + ": m=" + std::to_string(m) + " exceeds the maximum " +
+                      u128_str(static_cast<unsigned __int128>(max_edges)) + " for a simple graph");
         if (sp.connected && m < n - 1) gen_error(name + ": connected graph needs m >= n-1");
     }
 
@@ -361,16 +383,16 @@ class GraphOps {
 
     static bool dag_fits(ll n, ll m, bool simple) {
         if (m == 0) return true;
-        return n >= 2 && (!simple || m <= n * (n - 1) / 2);
+        return n >= 2 && (!simple || m <= static_cast<__int128>(n) * (n - 1) / 2);
     }
     static bool bipartite_fits(ll n, ll m, bool simple) {
         if (m == 0) return true;
-        return n >= 2 && (!simple || m <= (n / 2) * (n - n / 2));
+        return n >= 2 && (!simple || m <= static_cast<__int128>(n / 2) * (n - n / 2));
     }
     // 2 つ以上の組に分けて m 本入るか（一番入るのは 1 頂点と n-1 頂点に分けたとき）。
     static bool pieces_fits(ll n, ll m, const Spec& opt) {
         if (opt.connected || n < 2) return false;
-        const ll big = (n - 1) * (n - 2) / 2 * (opt.directed ? 2 : 1);
+        const __int128 big = static_cast<__int128>(n - 1) * (n - 2) / 2 * (opt.directed ? 2 : 1);
         return !opt.simple || m <= big;
     }
 

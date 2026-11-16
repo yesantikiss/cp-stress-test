@@ -57,7 +57,7 @@ copied failing input -> in.txt
 | --- | --- |
 | `-n N` `--iters N` | 回数（既定 1000） |
 | `-t SEC` `--time SEC` | 回数の代わりに秒数で回す |
-| `--big-iters N` | `-n` も `-t` も書かないとき、STRESS_BIG の生成器 1 つあたりの回数（既定 20）。STRESS_BIG だけを回すときは合計もこの回数で止まる |
+| `--big-iters N` | `-n` も `-t` も書かないとき、STRESS_BIG の生成器 1 つあたりの回数（既定 20、0 以上）。0 なら回さない。STRESS_BIG だけを回すときは合計もこの回数で止まる |
 | `--seed N` | 基準 seed（省略時はランダム。最後に `base_seed=...` と出る） |
 | `-g NAME` `--gen NAME` | 使う生成器。複数書ける、カンマ区切りも可。省略時は STRESS_BIG 以外を全部 |
 | `--max-cap N` | cap の上限（[seed と cap](#seed-と-cap)） |
@@ -144,7 +144,7 @@ main、愚直解、gen、checker、interactor は次の条件で動かす。
 | --- | --- |
 | `token`（既定） | 空白（スペース、改行など）で区切ったトークンの列が同じか。空白の量や行末の違いは無視する |
 | `exact` | バイト列が完全に同じか。違うときは最初に違うバイトの位置を出す |
-| `float` `float:EPS` | トークンごとに比べ、どちらも実数として読めれば `abs(main - ref) <= EPS * max(1, abs(ref))` なら同じとみなす（絶対誤差か相対誤差が EPS 以下）。EPS は省略時 1e-6。実数として読めないトークンは文字列として比べる |
+| `float` `float:EPS` | トークンごとに比べ、どちらも実数として読めれば `abs(main - ref) <= EPS * max(1, abs(ref))` なら同じとみなす（絶対誤差か相対誤差が EPS 以下）。EPS は 0 以上の有限の実数（省略時 1e-6）。実数として読めないトークンは文字列として比べる |
 
 WA の理由には、最初に違ったトークンの番号と両方の値、またはトークン数の違いが出る。
 
@@ -265,10 +265,10 @@ main、愚直解、gen、checker、interactor を並列にビルドする。フ�
 | オプション | 内容 |
 | --- | --- |
 | `--san` | `-fsanitize=address,undefined -fno-omit-frame-pointer -g -D_GLIBCXX_DEBUG` を足す |
-| `--cxxflags "..."` | さらにフラグを足す。環境変数 `STRESS_CXXFLAGS` でもいい（`--cxxflags` が優先） |
+| `--cxxflags "..."` | さらにフラグを足す。環境変数 `STRESS_CXXFLAGS` でもいい（`--cxxflags` が優先）。空白を含む引数もクォートして書ける。`-` で始まるときは `--cxxflags=-O0` や `--cxxflags="-O0 -g"` のように `=` でつなぐ |
 
 - include パスには、stress-test のディレクトリ（`stress/gen.hpp` などを読むため）、ACL（環境変数 `ACL_DIR`、なければ問題のディレクトリの `ac-library/`。`atcoder/` を含むディレクトリを指す）、`$CP_LIBRARY_DIR`（既定 `~/cp-library`）を入れる。
-- 問題のディレクトリに `pch_acl.hpp.gch` があり、ソースが `#include <atcoder/...>` を含むときは、`-include pch_acl.hpp` を付けてプリコンパイル済みヘッダを使う。main と愚直解だけで、`--san` のときは使わない。
+- 問題のディレクトリに `pch_acl.hpp.gch` があり、ソースが `#include <atcoder/...>` を含むときは、`-include pch_acl.hpp` を付けてプリコンパイル済みヘッダを使う。main と愚直解だけで、`--san` のときは使わない。`pch_acl.hpp` 本体が無くフラグ不一致で `.gch` を使えなかったときは、PCH なしで自動でやり直す。
 - バイナリは `.stress/bin/<種類>-<ハッシュ>` に置く。ハッシュはソースのパスとフラグから作るので、`--san` の有無などで別のバイナリになる。
 - ソースか、それが include しているファイルが変わったときだけ再ビルドする。
 

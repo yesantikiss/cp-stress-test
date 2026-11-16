@@ -111,8 +111,12 @@ class Core {
     }
 
     double real(double lo, double hi) {
+        if (!(lo <= hi) || !std::isfinite(lo) || !std::isfinite(hi))
+            gen_error("real: invalid range");
         const double u = static_cast<double>(next() >> 11) * 0x1.0p-53;  // [0, 1)
-        return lo + (hi - lo) * u;
+        const double diff = hi - lo;
+        if (std::isfinite(diff)) return lo + diff * u;
+        return lo * (1.0 - u) + hi * u;
     }
 
     bool coin(double p = 0.5) { return real(0.0, 1.0) < p; }
@@ -122,6 +126,7 @@ class Core {
     // exact なら小数点以下ちょうど d 桁（"3.000"）。値は 10^-d 刻みで、端が出やすいのは i と同じ。
     std::string decimal(double lo, double hi, ll d, DecimalOpt opt = {}) {
         if (d < 0 || d > 18) gen_error("decimal: d must be in [0, 18]");
+        if (!(lo <= hi)) gen_error("decimal: lo > hi");
         ll scale = 1;
         for (ll t = 0; t < d; ++t) scale *= 10;
         const long double sl = static_cast<long double>(lo) * scale, sh = static_cast<long double>(hi) * scale;
@@ -208,7 +213,8 @@ class Core {
     // x * 10^d を整数にする。誤差で 2.9999999 になった 3 は 3 として扱う。
     static ll round_scaled(long double x, bool up) {
         const long double r = std::round(x);
-        if (std::fabs(x - r) < 1e-6L) return static_cast<ll>(r);
+        const long double tol = std::min(1e-4L, std::fabs(r) * 1e-12L);
+        if (std::fabs(x - r) <= tol) return static_cast<ll>(r);
         return static_cast<ll>(up ? std::ceil(x) : std::floor(x));
     }
     std::uint64_t s_[4];

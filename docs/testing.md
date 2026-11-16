@@ -109,13 +109,14 @@ random の形は範囲などの共通の条件だけを見る。
 
 - 判定: OK / WA / RE / TLE / OLE / REF_RE / REF_TLE / REF_OLE、checker（`-c`、`--ref`）、interactor（`-i`、適応的な interactor）
 - 道具の側の失敗: gen error は GEN_FAIL、checker が例外で落ちたら CHECKER_FAIL で、どちらも終了コード 2
-- 比較方法: `--cmp exact`、`--cmp float:EPS`（誤差の内と外）、token で小数がずれたら WA
+- 比較方法: `--cmp exact`、`--cmp float:EPS`（誤差の内と外、`0`、不正な指定で終了コード 2）、token で小数がずれたら WA
 - インタラクティブ: interactor の WA の直後に main が落ちても、10 回とも WA になる
 - 縮小: 縮小中に gen error が出ても本物の WA を残し、警告を出す。縮小中に Ctrl+C（SIGINT）を送ると、元の WA を保存して終了コード 1
 - 実行環境: 深さ 100 万の再帰が `st` でも `st bench` でも落ちない。出力し続ける main が `--output-limit` で止まって OLE（愚直解なら REF_OLE、`st bench` でも OLE）になり、保存された出力が上限以下。Ctrl+C で止めたあとに main が残らない
-- 再現: `st repro` で同じ入力が出る。失敗時に表示された `st repro ...` に `--main` `--cmp` `--tl` が付き、そのまま打てば再現する
+- ビルド: `--cxxflags` のクォート、`--cxxflags=-O0` の形、不正なクォートのエラー、空白や特殊文字を含む依存パス（`.d`）のキャッシュと更新検知、`pch_acl.hpp` 本体が無く `.gch` のフラグが合わないときの PCH なしやり直し
+- 再現: `st repro` で同じ入力が出る。失敗時に表示された `st repro ...` に `--main` `--cmp` `--tl` `--cxxflags=...` が付き、そのまま打てば再現する
 - in.txt: 失敗時の書き出し、手書きの in.txt の退避、`--no-to-in`、`st restore`
-- 生成器: `-g` での選択、STRESS_BIG の回数、`st make`、`st bench`、タグの表示
+- 生成器: `-g` での選択（重複のまとめ、空指定）、`--big-iters`（`0` と負値）、STRESS_BIG の回数と終了後に次の生成器を飛ばさないこと、`st make`、`st bench`、タグの表示
 - `examples/adaptive/` と `examples/checker/` の例が、そのまま OK で通る
 
 ## テストしていないもの
@@ -123,4 +124,4 @@ random の形は範囲などの共通の条件だけを見る。
 - 乱数の分布の偏り（端が出やすいこと以外）
 - 縮小（shrink）が最小の入力まで縮むか
 - docs のコード片（`examples/` にあるものは上のテストで回る）
-- 利用者の環境（WSL、ACL の置き場所、PCH）での動作
+- 利用者の環境（WSL や実際の ACL の置き場所・構成）での動作（最小構成での PCH フォールバック自体は上でテストしている）

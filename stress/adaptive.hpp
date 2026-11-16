@@ -344,9 +344,14 @@ inline std::vector<std::vector<std::pair<int, int>>> trees(int n) {
     if (n < 1) adaptive_detail::fail("cand::trees: n < 1");
     if (n == 1) return {{}};
     if (n == 2) return {{{1, 2}}};
+    long double cnt = 1;
+    for (int i = 0; i < n - 2; ++i) cnt *= n, detail::check_count(cnt, "cand::trees");
     std::vector<std::vector<std::pair<int, int>>> res;
-    for (const auto& code : tuples(n - 2, 1, n)) {  // Prüfer 列から木を作る
-        std::vector<int> deg(n + 1, 1);
+    res.reserve(static_cast<std::size_t>(cnt));
+    std::vector<int> code(n - 2, 1);
+    std::vector<int> deg(n + 1);
+    while (true) {  // Prüfer 列から木を作る
+        std::fill(deg.begin(), deg.end(), 1);
         for (int x : code) ++deg[x];
         std::vector<std::pair<int, int>> es;
         es.reserve(n - 1);
@@ -363,6 +368,10 @@ inline std::vector<std::vector<std::pair<int, int>>> trees(int n) {
         es.emplace_back(u, v);
         std::sort(es.begin(), es.end());
         res.push_back(std::move(es));
+        int i = n - 3;
+        while (i >= 0 && code[i] == n) code[i--] = 1;
+        if (i < 0) break;
+        ++code[i];
     }
     return res;
 }

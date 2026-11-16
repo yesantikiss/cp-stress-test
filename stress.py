@@ -7,6 +7,7 @@
   st                      # 1000 回
   st -n 5000 --seed 42
   st -t 60                # 60 秒
+  st -j 4                 # 4 本並列（-j だけならコア数）
   st -c                   # スペシャルジャッジ（checker.cpp。別名なら -c foo.cpp）
   st -i                   # インタラクティブ（interactor.cpp。別名なら -i foo.cpp）
   st -g max -g all_same  # STRESS_GEN の生成器を絞る
@@ -27,6 +28,7 @@ import argparse
 import contextlib
 import datetime as dt
 import hashlib
+import heapq
 import json
 import math
 import os
@@ -41,11 +43,12 @@ import sys
 import threading
 import time
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
 
 TOOL_ROOT = Path(__file__).resolve().parent
+_spawn_lock = threading.Lock()  # child_limits の中（st 自身の上限を書き換えている間）は 1 スレッドだけ
 MASK64 = (1 << 64) - 1
 
 EXIT_OK, EXIT_FOUND, EXIT_ERROR = 0, 1, 2
@@ -262,6 +265,8 @@ def child_limits(output_mb: float | None):
     """
     saved: list[tuple[int, tuple[int, int]]] = []
     inf = resource.RLIM_INFINITY
+    # 上限は st 全体で 1 つなので、-j で同時に起動するときは 1 本ずつ通す（起動の一瞬だけ）
+    _spawn_lock.acquire()
     try:
         for res, want in ((resource.RLIMIT_STACK, STACK_MB),
                           (resource.RLIMIT_FSIZE, output_mb)):
@@ -277,6 +282,64 @@ def child_limits(output_mb: float | None):
     finally:
         for res, lim in reversed(saved):
             resource.setrlimit(res, lim)
+        _spawn_lock.release()
+
+
+# ---------------------------------------------------------------- 並列実行で止めるための印
+
+
+class Cancelled(Exception):
+    """-j で回しているケースを途中で止めた。結果は捨てる。"""
+
+
+class Token:
+    """1 ケースぶんの子プロセスをまとめて止めるための印。止めたあとに起動したものもすぐ止める。"""
+
+    def __init__(self) -> None:
+        self.cancelled = False
+        self.procs: list[subprocess.Popen] = []
+        self.lock = threading.Lock()
+
+    def add(self, p: subprocess.Popen) -> None:
+        with self.lock:
+            self.procs.append(p)
+            if self.cancelled:
+                _kill(p)
+
+    def remove(self, p: subprocess.Popen) -> None:
+        with self.lock:
+            if p in self.procs:
+                self.procs.remove(p)
+
+    def cancel(self) -> None:
+        with self.lock:
+            self.cancelled = True
+            procs = list(self.procs)
+        for p in procs:
+            _kill(p)
+
+
+_tls = threading.local()  # 作業スレッドごとの Token
+
+
+def _token() -> Token | None:
+    return getattr(_tls, "token", None)
+
+
+def check_cancel() -> None:
+    t = _token()
+    if t is not None and t.cancelled:
+        raise Cancelled
+
+
+def _track(p: subprocess.Popen) -> None:
+    if (t := _token()) is not None:
+        t.add(p)
+
+
+def _untrack(p: subprocess.Popen) -> None:
+    if (t := _token()) is not None:
+        t.remove(p)
 
 
 def wait_exit(proc: subprocess.Popen, timeout: float) -> bool:
@@ -314,6 +377,7 @@ def run(exe: Path | list[str], stdin: Path | None, stdout: Path, stderr: Path, t
         cwd: Path, args: list[str] | None = None, env: dict[str, str] | None = None,
         output_mb: float | None = None) -> RunResult:
     """1 回実行する。Ctrl+C などで抜けるときも、子プロセスは必ず止める。"""
+    check_cancel()
     cmd = [str(exe)] if isinstance(exe, Path) else list(exe)
     cmd += args or []
     proc = None
@@ -324,16 +388,21 @@ def run(exe: Path | list[str], stdin: Path | None, stdout: Path, stderr: Path, t
                 start = time.perf_counter()
                 proc = subprocess.Popen(cmd, stdin=fi, stdout=fo, stderr=fe, cwd=cwd, start_new_session=True,
                                         env={**os.environ, **env} if env else None)
+            _track(proc)
             if not wait_exit(proc, tl):
                 _kill(proc)
                 proc.wait()
+                check_cancel()
                 return RunResult("TLE", -9, time.perf_counter() - start)
             code = proc.wait()
             elapsed = time.perf_counter() - start
         finally:
-            if proc is not None and proc.returncode is None:
-                _kill(proc)
-                proc.wait()
+            if proc is not None:
+                if proc.returncode is None:
+                    _kill(proc)
+                    proc.wait()
+                _untrack(proc)
+    check_cancel()  # 止められて終わった結果は使わない
     status = "OK" if code == 0 else "OLE" if code == -signal.SIGXFSZ and output_mb is not None else "RE"
     return RunResult(status, code, elapsed)
 
@@ -614,6 +683,7 @@ def run_interactive(progs: Programs, d: Path, opt: argparse.Namespace) -> Verdic
     env = dict(os.environ, STRESS_REPORT=str(report))
     log = Transcript()
     main = inter = None
+    check_cancel()
     try:
         with open(d / "stderr_main.txt", "wb") as em, open(d / "stderr_interactor.txt", "wb") as ei, \
                 child_limits(opt.output_limit):
@@ -622,12 +692,17 @@ def run_interactive(progs: Programs, d: Path, opt: argparse.Namespace) -> Verdic
                                     cwd=d, start_new_session=True)
             inter = subprocess.Popen([str(progs.interactor), str(d / "in.txt")], stdin=subprocess.PIPE,
                                      stdout=subprocess.PIPE, stderr=ei, cwd=d, start_new_session=True, env=env)
-        return _interact(main, inter, start, log, report, d, opt)
+            _track(main)
+            _track(inter)
+        v = _interact(main, inter, start, log, report, d, opt)
+        check_cancel()
+        return v
     finally:
         for p in (main, inter):  # Ctrl+C などで抜けたときも、子プロセスを残さない
             if p is not None:
                 _kill(p)
                 p.wait()
+                _untrack(p)
 
 
 def _interact(main: subprocess.Popen, inter: subprocess.Popen, start: float, log: Transcript, report: Path,
@@ -873,35 +948,201 @@ def copy_to_in(workdir: Path, src: Path) -> None:
 TOOL_FAILURES = ("GEN_FAIL", "CHECKER_FAIL", "INTERACTOR_FAIL")  # 道具の側のバグ。解答の失敗としては扱わない
 
 
-def shrink(progs: Programs, case: Case, run_dir: Path, opt: argparse.Namespace,
-           deadline: float) -> tuple[tuple[Case, Verdict] | None, list[tuple[Case, Verdict]]]:
+def shrink(runner: "Runner", case: Case, opt: argparse.Namespace, deadline: float
+           ) -> tuple[tuple[Case, Verdict, Path] | None, list[tuple[Case, Verdict]]]:
     """同じ生成器で cap を小さくして、失敗する入力を探し直す。
 
-    返り値は (見つかった失敗 or None, 途中で出た道具の側の失敗)。GEN_FAIL などは解答の失敗ではないので
-    採用せずに飛ばし、縮小を続ける（あとで警告として出す）。
+    返り値は (見つかった失敗とその作業ディレクトリ or None, 途中で出た道具の側の失敗)。GEN_FAIL などは解答の失敗ではないので
+    採用せずに飛ばし、縮小を続ける（あとで警告として出す）。-j のときは候補を並列に試し、番号が一番小さい失敗を採る。
     """
     cap = case.cap or 1
     caps = sorted({c for c in [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 25, 32, 40, 50, 64, 80, 100] if c < cap}
                   | ({cap // 2, cap * 3 // 4} - {0, cap}))
     base = splitmix64(case.seed ^ 0x5EED)
-    tool_failures: list[tuple[Case, Verdict]] = []
-    try:
+    tool_failures: list[tuple[int, Case, Verdict]] = []
+
+    def candidates():
         for c in caps:
             for t in range(opt.shrink_tries):
                 if time.monotonic() > deadline:
-                    return None, tool_failures
-                cand = Case(case_seed(base, c * 1_000_003 + t), c, case.name)
-                Out.status(f"shrinking: cap={c} try {t + 1}/{opt.shrink_tries}")
-                v = run_case(progs, cand, run_dir, opt)
-                if v.kind in TOOL_FAILURES:
-                    tool_failures.append((cand, v))
-                    continue
-                if v.kind != "OK":
-                    return (cand, v), tool_failures
+                    return
+                yield Case(case_seed(base, c * 1_000_003 + t), c, case.name)
+
+    def on_result(idx: int, cand: Case, v: Verdict) -> None:
+        if v.kind in TOOL_FAILURES:
+            tool_failures.append((idx, cand, v))
+        Out.status(f"shrinking: cap={cand.cap} try {idx % opt.shrink_tries + 1}/{opt.shrink_tries}")
+
+    found = None
+    try:
+        found = runner.search(candidates(), lambda v: v.kind != "OK" and v.kind not in TOOL_FAILURES, on_result)
     except KeyboardInterrupt:
         # 縮小は待ちきれずに止めることがあるので、Ctrl+C は「縮小をやめる」にして元の失敗を残す
         Out.log(Out.yellow("shrink interrupted") + "  縮小をやめて、見つけた失敗をそのまま保存する")
-    return None, tool_failures
+    limit = found[0] if found else math.inf
+    tools = [(c, v) for i, c, v in sorted(tool_failures, key=lambda x: x[0]) if i < limit]
+    if found is None:
+        return None, tools
+    _, cand, v, d = found
+    return (cand, v, d), tools
+
+
+# ---------------------------------------------------------------- 並列実行
+
+
+RECHECK = ("TLE", "REF_TLE")  # -j で出たら、単独で測り直す
+
+
+class Runner:
+    """ケースを最大 jobs 本まで同時に走らせ、失敗のうち番号が一番小さいものを返す。
+
+    それより前の番号で走っているケースは最後まで待ち、後ろの番号のものは止める。こうすると -j の値によらず、
+    直列で回したときと同じ失敗になる。jobs = 1 のときはスレッドを使わず、今のスレッドでそのまま回す。
+    -j で TLE / REF_TLE が出たら、ほかを止めてそのケースだけ単独で測り直す。単独で通ったら、
+    並列だと時間がぶれるということなので、そこからは -j 1 で回す。
+    """
+
+    def __init__(self, root: Path, jobs: int, evaluate) -> None:
+        self.jobs = jobs
+        self.evaluate = evaluate  # (Case, 作業ディレクトリ) -> Verdict
+        if jobs == 1:
+            self.free = [root]
+        else:
+            fresh_dir(root)
+            self.free = [root / str(i) for i in range(jobs, 0, -1)]
+        self.pool = ThreadPoolExecutor(max_workers=jobs) if jobs > 1 else None
+
+    def close(self) -> None:
+        if self.pool is not None:
+            self.pool.shutdown(wait=True)
+
+    def release(self, d: Path) -> None:
+        self.free.append(d)
+
+    def _work(self, token: Token, case: Case, d: Path) -> Verdict:
+        _tls.token = token
+        try:
+            return self.evaluate(case, d)
+        finally:
+            _tls.token = None
+
+    def search(self, cases, is_fail, on_result=None) -> tuple[int, Case, Verdict, Path] | None:
+        """cases を番号の順に試す。失敗が無ければ None。見つけたら (番号, ケース, 判定, 作業ディレクトリ)。
+
+        返した作業ディレクトリは release するまで使わない。on_result(番号, ケース, 判定) は結果が出るたびに呼ぶ。
+        """
+        it = enumerate(cases)
+        pending: list[tuple[int, int, Case]] = []  # 止めて戻したケース（番号の小さい順に取り出す）
+        inflight: dict = {}  # Future -> (番号, ケース, 作業ディレクトリ, Token)
+        best: tuple[int, Case, Verdict, Path] | None = None
+        stopped = False
+
+        def take() -> tuple[int, Case] | None:
+            nonlocal stopped
+            if stopped:
+                return None
+            if pending:
+                idx, _, case = heapq.heappop(pending)
+            else:
+                try:
+                    idx, case = next(it)
+                except StopIteration:
+                    stopped = True
+                    return None
+            if best is not None and idx > best[0]:
+                stopped = True  # これより後ろは要らない（番号は増える一方）
+                return None
+            return idx, case
+
+        def accept(idx: int, case: Case, v: Verdict, d: Path) -> None:
+            nonlocal best
+            if on_result is not None:
+                on_result(idx, case, v)
+            if is_fail(v) and (best is None or idx < best[0]):
+                if best is not None:
+                    self.release(best[3])
+                best = (idx, case, v, d)
+                for i, _, _, tok in inflight.values():
+                    if i > idx:
+                        tok.cancel()
+            else:
+                self.release(d)
+
+        def cancel_all() -> None:
+            for _, _, _, tok in inflight.values():
+                tok.cancel()
+            for f, (i, c, d, _) in list(inflight.items()):
+                try:
+                    f.result()
+                except Exception:  # Cancelled のほか、止めたせいで出た例外も捨てる
+                    pass
+                self.release(d)
+                heapq.heappush(pending, (i, c.seed, c))
+            inflight.clear()
+
+        try:
+            while True:
+                while len(inflight) < self.jobs and (item := take()) is not None:
+                    idx, case = item
+                    d = self.free.pop()
+                    if self.jobs == 1 and not inflight:
+                        accept(idx, case, self.evaluate(case, d), d)
+                        continue
+                    tok = Token()
+                    inflight[self.pool.submit(self._work, tok, case, d)] = (idx, case, d, tok)
+                if not inflight:
+                    break
+                done, _ = wait(inflight, timeout=0.1, return_when=FIRST_COMPLETED)
+                for f in sorted(done, key=lambda f: inflight[f][0]):
+                    if f not in inflight:
+                        continue  # 測り直しのときに片付けた
+                    idx, case, d, tok = inflight.pop(f)
+                    try:
+                        v = f.result()
+                    except Cancelled:
+                        v = None
+                    if v is None or tok.cancelled:
+                        self.release(d)
+                        heapq.heappush(pending, (idx, case.seed, case))
+                        continue
+                    if v.kind in RECHECK and self.jobs > 1:
+                        v = self._recheck(case, v, d, cancel_all)
+                    accept(idx, case, v, d)
+        except BaseException:
+            # Ctrl+C など: 走っている子プロセスを全部止めてから抜ける
+            for _, _, _, tok in inflight.values():
+                tok.cancel()
+            for f in list(inflight):
+                try:
+                    f.result()
+                except BaseException:
+                    pass
+            raise
+        return best
+
+    def _recheck(self, case: Case, v: Verdict, d: Path, cancel_all) -> Verdict:
+        cancel_all()  # ほかのケースは止めて、あとで走らせ直す
+        Out.status(f"{v.kind} under -j {self.jobs}; re-running case={case.id} alone ...")
+        v2 = self.evaluate(case, d)
+        if v2.kind in RECHECK:
+            return v2
+        took = f"{v2.elapsed * 1000:.0f}ms" if v.kind == "TLE" else v2.kind
+        Out.log(Out.yellow("warning: ") + f"-j {self.jobs} では {v.kind} だったケースが単独では通った（{took}）。"
+                "並列だと時間がぶれるので、ここからは -j 1 で回す")
+        Out.log(Out.dim(f"  case={case.id}"))
+        self.jobs = 1
+        return v2
+
+
+def resolve_jobs(jobs: int) -> int:
+    if jobs < 0:
+        die("-j must be >= 0")
+    if jobs == 0:
+        try:
+            return max(1, len(os.sched_getaffinity(0)))
+        except AttributeError:
+            return max(1, os.cpu_count() or 1)
+    return jobs
 
 
 # ---------------------------------------------------------------- ビルドの準備
@@ -1000,10 +1241,44 @@ def check_mode(opt: argparse.Namespace) -> None:
     parse_cmp_mode(opt.cmp)
 
 
+class CaseStream:
+    """st run で試すケースの並び。k 番目のケースは k と基準 seed だけで決まる（-j でも同じ）。
+
+    生成器は順番に回し、cap は生成器ごとに小さい方から増やす。STRESS_BIG の生成器は big_limit 回で外す。
+    """
+
+    def __init__(self, gens: list[str], limited: set[str], big_limit: int | None, total: int | None,
+                 base: int, max_cap: int | None, deadline: float) -> None:
+        self.limited, self.big_limit, self.total = limited, big_limit, total
+        self.base, self.max_cap, self.deadline = base, max_cap, deadline
+        self.done = {n: 0 for n in gens}
+        self.active = [n for n in gens if not (n in limited and big_limit == 0)]
+        if not self.active:
+            self.total = 0
+
+    def __iter__(self):
+        k = pos = 0
+        while self.active and (self.total is None or k < self.total) and time.monotonic() < self.deadline:
+            name = self.active[pos]
+            case = Case(case_seed(self.base, k), cap_for(self.done[name], self.max_cap), name)
+            self.done[name] += 1
+            if name in self.limited and self.done[name] >= self.big_limit:
+                self.active.pop(pos)
+                if self.active:
+                    pos %= len(self.active)
+                else:
+                    self.total = k + 1
+            else:
+                pos = (pos + 1) % len(self.active)
+            k += 1
+            yield case
+
+
 def cmd_run(opt: argparse.Namespace) -> int:
     check_mode(opt)
     if opt.big_iters < 0:
         die("--big-iters must be >= 0")
+    jobs = resolve_jobs(opt.jobs)
     workdir = Path.cwd()
     progs, sources = prepare(opt, workdir, {"main", "judge"})
     gens = select_gens(progs, opt.gens, big=False)
@@ -1017,45 +1292,39 @@ def cmd_run(opt: argparse.Namespace) -> int:
     limited = {n for n in gens if n in progs.big} if big_limit is not None else set()
     if limited and len(limited) == len(gens):
         iters = min(iters, big_limit * len(gens))
-    total = iters if not opt.time else None
+    stream = CaseStream(gens, limited, big_limit, iters if not opt.time else None, base, opt.max_cap, deadline)
     mode = mode_name(opt) if mode_name(opt) != "compare" else f"compare/{opt.cmp}"
-    Out.log(Out.dim(f"mode={mode} gens={','.join(gens)} base_seed={base} tl={opt.tl}s"))
+    Out.log(Out.dim(f"mode={mode} gens={','.join(gens)} base_seed={base} tl={opt.tl}s"
+                    + (f" jobs={jobs}" if jobs > 1 else "")))
 
     slowest = 0.0
     most_queries: tuple[int, int] | None = None
-    k = 0
+    n_done = 0
     last_status = 0.0
-    done = {n: 0 for n in gens}
-    active = [n for n in gens if not (n in limited and big_limit == 0)]
-    if not active:
-        total = 0
-    pos = 0
-    while active and (total is None or k < total) and time.monotonic() < deadline:
-        # 生成器は順番に回し、cap は生成器ごとに小さい方から増やす
-        name = active[pos]
-        case = Case(case_seed(base, k), cap_for(done[name], opt.max_cap), name)
-        done[name] += 1
-        if name in limited and done[name] >= big_limit:
-            active.pop(pos)
-            if active:
-                pos %= len(active)
-            else:
-                total = k + 1
-        else:
-            pos = (pos + 1) % len(active)
-        v = run_case(progs, case, run_dir, opt)
+
+    def on_result(idx: int, case: Case, v: Verdict) -> None:
+        nonlocal slowest, most_queries, n_done, last_status
         slowest = max(slowest, v.elapsed)
         if v.queries and (most_queries is None or v.queries[0] > most_queries[0]):
             most_queries = v.queries
-        k += 1
+        n_done += 1
         now = time.monotonic()
         if now - last_status > 0.1:
-            prog = f"{k}/{total}" if total else f"{k}"
+            prog = f"{n_done}/{stream.total}" if stream.total else f"{n_done}"
             Out.status(f"[{prog}] cap={case.cap} OK  max {slowest * 1000:.0f}ms{fmt_queries(most_queries)}"
                        f"  {now - start:.1f}s")
             last_status = now
-        if v.kind == "OK":
-            continue
+
+    runner = Runner(run_dir, jobs, lambda case, d: run_case(progs, case, d, opt))
+    try:
+        found = runner.search(stream, lambda v: v.kind != "OK", on_result)
+        if found is None:
+            Out.clear_status()
+            Out.log(Out.green("OK") + f"  {n_done} cases  max {slowest * 1000:.0f}ms{fmt_queries(most_queries)}"
+                    f"  {time.monotonic() - start:.1f}s"
+                    + Out.dim(f"  base_seed={base}"))
+            return EXIT_OK
+        idx, case, v, d = found
 
         if v.kind in TOOL_FAILURES:
             Out.log(Out.red(v.kind) + f"  {v.detail}")
@@ -1066,35 +1335,34 @@ def cmd_run(opt: argparse.Namespace) -> int:
             snapshot = workdir / ".stress" / "run_found"
             if snapshot.exists():
                 shutil.rmtree(snapshot)
-            shutil.copytree(run_dir, snapshot)
+            shutil.copytree(d, snapshot)
+            runner.release(d)
             Out.log(Out.dim(f"{v.kind} at case={case.id}; shrinking (Ctrl+C で縮小をやめて保存)"))
-            found, tool_failures = shrink(progs, case, run_dir, opt, time.monotonic() + opt.shrink_time)
+            shrunk, tool_failures = shrink(runner, case, opt, time.monotonic() + opt.shrink_time)
             Out.clear_status()
             if tool_failures:
                 first_case, first_v = tool_failures[0]
                 Out.log(Out.yellow("warning: ") + f"縮小中に道具の側の失敗が {len(tool_failures)} 回出た（そのケースは飛ばした）")
                 Out.log(f"  {first_v.kind}  {first_v.detail}")
                 Out.log(Out.dim(f"  case={first_case.id}  ->  st repro {first_case.id}" + judge_flags(opt)))
-            if found:
-                Out.log(Out.dim(f"shrunk: cap {case.cap} -> {found[0].cap}"))
-                case, v = found
+            if shrunk:
+                Out.log(Out.dim(f"shrunk: cap {case.cap} -> {shrunk[0].cap}"))
+                case, v, d = shrunk
             else:
-                shutil.rmtree(run_dir)
-                shutil.copytree(snapshot, run_dir)
+                if d.exists():
+                    shutil.rmtree(d)
+                shutil.copytree(snapshot, d)
             shutil.rmtree(snapshot, ignore_errors=True)
 
-        dest = save_failure(workdir, run_dir, case, v, opt, sources)
+        dest = save_failure(workdir, d, case, v, opt, sources)
         meta = json.loads((dest / "meta.json").read_text())
         show_failure(dest, v, case.id, meta["repro"], workdir)
         if opt.to_in:
             copy_to_in(workdir, dest / "in.txt")
-        Out.log(Out.dim(f"found after {k} cases ({time.monotonic() - start:.1f}s)"))
+        Out.log(Out.dim(f"found after {idx + 1} cases ({time.monotonic() - start:.1f}s)"))
         return EXIT_FOUND
-
-    Out.log(Out.green("OK") + f"  {k} cases  max {slowest * 1000:.0f}ms{fmt_queries(most_queries)}"
-            f"  {time.monotonic() - start:.1f}s"
-            + Out.dim(f"  base_seed={base}"))
-    return EXIT_OK
+    finally:
+        runner.close()
 
 
 def cmd_repro(opt: argparse.Namespace) -> int:
@@ -1298,6 +1566,8 @@ def parse(argv: list[str]) -> argparse.Namespace:
     p.add_argument("-t", "--time", type=float, help="回数の代わりに秒数で回す")
     p.add_argument("--seed", type=int, help="基準 seed（省略時はランダム）")
     p.add_argument("--max-cap", type=int, help="g.size() に渡す cap の上限")
+    p.add_argument("-j", "--jobs", type=int, nargs="?", const=0, default=1, metavar="N",
+                   help="N 本並列に回す。数を省くか 0 ならコア数 (default: 1)")
     p.add_argument("--no-shrink", dest="shrink", action="store_false", help="失敗後の縮小をしない")
     p.add_argument("--shrink-tries", type=int, default=200, help="縮小で cap 1 つあたりに試す回数 (default: 200)")
     p.add_argument("--shrink-time", type=float, default=20.0, help="縮小にかける時間の上限 [s] (default: 20)")

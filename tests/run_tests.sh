@@ -410,6 +410,7 @@ assert tr.dropped == 3, tr.dropped
 assert any("3 lines omitted" in ln for ln in tr.lines())
 
 assert mod._link_error("/usr/bin/ld: cannot find -lstdc++: No such file or directory\ncollect2: error: ld returned 1 exit status")
+assert mod._link_error("/usr/bin/ld: -lstdc++ が見つかりません: そのようなファイルやディレクトリはありません\ncollect2: エラー: ld はステータス 1 で終了しました")
 assert not mod._link_error("main.cpp:3:5: error: 'foo' was not declared in this scope")
 
 import tempfile
@@ -434,6 +435,89 @@ with tempfile.TemporaryDirectory() as t:
     mod.SHM = Path(t) / "no_such_shm"
     r = mod.work_root(w)
     assert r == w / ".stress" / "run" and not r.is_symlink(), r
+PY
+
+# Runner（-j）: 測り直しで止めて戻したケースを取りこぼさない。偽の evaluate で、走ったケースと見つかる失敗を確かめる
+check py_runner 0 python3 -B - "$root" "$build_dir/runner" << 'PY'
+import importlib.util, sys, time
+from pathlib import Path
+
+root = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("stress_mod", root / "stress.py")
+mod = importlib.util.module_from_spec(spec)
+sys.modules["stress_mod"] = mod
+spec.loader.exec_module(mod)
+logs = []
+mod.Out.log = lambda *a: logs.append(" ".join(map(str, a)))
+mod.Out.status = lambda *a: None
+
+def search(n, jobs, plan, alone=None):
+    """plan: seed -> (秒, 並列のときの判定)。alone: seed -> 単独で測り直したときの判定（無ければ OK）"""
+    ran = []
+    def ev(case, d):
+        tok = getattr(mod._tls, "token", None)
+        sec, kind = plan.get(case.seed, (0.02, "OK"))
+        if tok is None:  # 今のスレッドで 1 本だけ（測り直しか、-j 1 に切り替えたあと）
+            ran.append(case.seed)
+            return mod.Verdict((alone or {}).get(case.seed, "OK" if kind in mod.RECHECK else kind))
+        t = time.time()
+        while time.time() - t < sec:
+            if tok.cancelled:
+                raise mod.Cancelled()
+            time.sleep(0.005)
+        ran.append(case.seed)
+        return mod.Verdict(kind)
+    r = mod.Runner(Path(sys.argv[2]), jobs, ev)
+    try:
+        best = r.search([mod.Case(i, None, "g") for i in range(n)], lambda v: v.kind != "OK")
+    finally:
+        r.close()
+    return (None if best is None else (best[0], best[2].kind)), sorted(set(ran))
+
+# 末尾で偽 TLE: it が尽きたあとに止めて戻したケースも走らせる
+best, ran = search(10, 4, {7: (0.3, "TLE"), 8: (1.0, "OK"), 9: (1.0, "OK")})
+assert best is None and ran == list(range(10)), (best, ran)
+assert any("単独では通った" in ln for ln in logs), logs
+
+# 後ろの失敗が先に決まったあとで前のケースが偽 TLE: 止めて戻した前のケースを走らせ、番号が一番小さい失敗を返す
+best, ran = search(10, 4, {0: (0.4, "TLE"), 1: (1.0, "WA"), 2: (0.05, "WA"), 3: (1.0, "OK")})
+assert best == (1, "WA"), (best, ran)
+
+# 単独で測り直したら WA: 「通った」とは書かず、WA として返す
+logs.clear()
+best, ran = search(4, 4, {0: (0.1, "TLE"), 1: (1.0, "OK"), 2: (1.0, "OK"), 3: (1.0, "OK")}, alone={0: "WA"})
+assert best == (0, "WA"), best
+assert not any("通った" in ln for ln in logs) and any("WA だった" in ln for ln in logs), logs
+PY
+
+# build: PCH なしでやり直したあとに静的リンクなしでもやり直すとき、-include も -static も付けない（g++ は偽物）
+check py_build_fallback 0 python3 -B - "$root" "$build_dir/build_fallback" << 'PY'
+import importlib.util, shutil, sys, types
+from pathlib import Path
+
+root = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("stress_mod", root / "stress.py")
+mod = importlib.util.module_from_spec(spec)
+sys.modules["stress_mod"] = mod
+spec.loader.exec_module(mod)
+
+w = Path(sys.argv[2])
+shutil.rmtree(w, ignore_errors=True)
+(w / "ac-library").mkdir(parents=True)
+(w / "pch_acl.hpp.gch").write_text("")  # pch_acl.hpp 本体は無い
+src = w / "main.cpp"
+src.write_text("#include <atcoder/dsu>\nint main() {}\n")
+calls = []
+def fake_run(cmd, **kw):
+    calls.append(cmd)
+    if "-include" in cmd:
+        return types.SimpleNamespace(returncode=1, stderr="<command-line>: fatal error: pch_acl.hpp: No such file or directory\n")
+    if "-static" in cmd:
+        return types.SimpleNamespace(returncode=1, stderr="/usr/bin/ld: -lc が見つかりません\ncollect2: エラー: ld はステータス 1 で終了しました\n")
+    return types.SimpleNamespace(returncode=0, stderr="")
+mod.subprocess.run = fake_run
+mod.build(mod.BuildConfig(w), src, "main")
+assert len(calls) == 3 and "-include" in calls[0] and "-static" in calls[1] and "-include" not in calls[2] and "-static" not in calls[2], calls
 PY
 
 # pch_acl.hpp 本体が無くても .gch だけで動き、フラグ不一致なら PCH なしでやり直す
@@ -463,5 +547,16 @@ g++ -std=gnu++20 -O2 -DLOCAL -Iac-library -x c++-header pch_acl.hpp -o pch_acl.h
 rm pch_acl.hpp
 check pch_match 0 env ACL_DIR="$work_p/ac-library" CP_LIBRARY_DIR="$work_p/no_lib" python3 "$root/stress.py" -n 2 --seed 1
 check pch_mismatch_fallback 0 env ACL_DIR="$work_p/ac-library" CP_LIBRARY_DIR="$work_p/no_lib" python3 "$root/stress.py" -n 2 --seed 1 --cxxflags=-O0
+
+# 後片付け: テストで使った各ディレクトリで st clean を呼び、/dev/shm 側の作業場所も消えることを確かめる
+clean_bad=""
+while IFS= read -r s; do
+    target=""
+    [ -L "$s/run" ] && target="$(readlink "$s/run")"
+    (cd "$(dirname "$s")" && python3 "$root/stress.py" clean) >/dev/null 2>&1 || clean_bad="$clean_bad $s(exit)"
+    { [ -n "$target" ] && [ -e "$target" ]; } && clean_bad="$clean_bad $target"
+    { [ -e "$s/run" ] || [ -L "$s/run" ]; } && clean_bad="$clean_bad $s/run"
+done < <(find "$build_dir" -type d -name .stress -prune)
+if [ -z "$clean_bad" ]; then echo "ok   clean_shm"; else echo "FAIL clean_shm (left:$clean_bad)"; fail=1; fi
 
 [ "$fail" -eq 0 ] && echo "All tests passed" || { echo "Some tests failed"; exit 1; }

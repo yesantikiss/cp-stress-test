@@ -547,6 +547,50 @@ def read_tags(d: Path) -> list[str]:
     return tags
 
 
+SHM = Path("/dev/shm")
+
+
+def _shm_dir(workdir: Path) -> Path | None:
+    """問題のディレクトリごとの /dev/shm の作業場所。使えなければ None。"""
+    if not SHM.is_dir() or not os.access(SHM, os.W_OK):
+        return None
+    base = SHM / f"cp-stress-test-{os.getuid()}"
+    try:
+        base.mkdir(mode=0o700, exist_ok=True)
+        st = base.lstat()
+        if base.is_symlink() or st.st_uid != os.getuid():
+            return None  # 他人が作ったものは使わない
+    except OSError:
+        return None
+    return base / hashlib.sha1(str(workdir.resolve()).encode()).hexdigest()[:12]
+
+
+def work_root(workdir: Path) -> Path:
+    """ケースを走らせる作業場所を返す。
+
+    /dev/shm（メモリ上のファイルシステム）が使えればそこに置き、.stress/run をそこへのシンボリックリンクにする。
+    1 ケースごとにファイルを作って消すので、ディスクより速い（WSL では特に差が大きい）。使えなければ .stress/run。
+    """
+    link = workdir / ".stress" / "run"
+    real = _shm_dir(workdir)
+    if real is not None:
+        try:
+            real.mkdir(exist_ok=True)
+            if not (link.is_symlink() and os.readlink(link) == str(real)):
+                if link.is_symlink() or link.is_file():
+                    link.unlink()
+                elif link.is_dir():
+                    shutil.rmtree(link)
+                link.parent.mkdir(parents=True, exist_ok=True)
+                link.symlink_to(real)
+            return real
+        except OSError:
+            pass
+    if link.is_symlink():
+        link.unlink()
+    return link
+
+
 def fresh_dir(d: Path) -> Path:
     """d を空にする（前のケースの出力が残らないように）。ディレクトリ自体は消さずに中身だけ消す（その方が速い）。"""
     if d.is_dir() and not d.is_symlink():
@@ -1302,7 +1346,7 @@ def cmd_run(opt: argparse.Namespace) -> int:
     workdir = Path.cwd()
     progs, sources = prepare(opt, workdir, {"main", "judge"})
     gens = select_gens(progs, opt.gens, big=False)
-    run_dir = workdir / ".stress" / "run"
+    run_dir = work_root(workdir)
     base = opt.seed if opt.seed is not None else int.from_bytes(os.urandom(8), "little")
     start = time.monotonic()
     deadline = start + opt.time if opt.time else math.inf
@@ -1390,11 +1434,11 @@ def cmd_repro(opt: argparse.Namespace) -> int:
     workdir = Path.cwd()
     progs, sources = prepare(opt, workdir, {"main", "judge"})
     case = Case.parse(opt.case, progs.gens)
-    run_dir = workdir / ".stress" / "run"
+    run_dir = work_root(workdir)
     v = run_case(progs, case, run_dir, opt)
     if v.kind == "OK":
         Out.log(Out.green("OK") + f"  case={case.id} (再現しなかった)")
-        Out.log(Out.dim(f"input: {(run_dir / 'in.txt').relative_to(workdir)}"))
+        Out.log(Out.dim("input: .stress/run/in.txt"))
         return EXIT_OK
     dest = save_failure(workdir, run_dir, case, v, opt, sources)
     meta = json.loads((dest / "meta.json").read_text())
@@ -1437,7 +1481,7 @@ def cmd_bench(opt: argparse.Namespace) -> int:
     if benchdir.exists():
         shutil.rmtree(benchdir)
     benchdir.mkdir(parents=True)
-    tmp = workdir / ".stress" / "run"
+    tmp = work_root(workdir)
     worst = 0.0
     bad_count = 0
     for k, case in enumerate(make_cases(opt, progs)):
@@ -1502,6 +1546,9 @@ def cmd_restore(opt: argparse.Namespace) -> int:
 
 def cmd_clean(opt: argparse.Namespace) -> int:
     d = Path.cwd() / ".stress"
+    shm = _shm_dir(Path.cwd())
+    if shm is not None and shm.exists():
+        shutil.rmtree(shm)
     for name in ("fail", "run", "last", "bench", "make"):
         p = d / name
         if p.is_symlink():

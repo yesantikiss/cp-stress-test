@@ -412,6 +412,20 @@ with tempfile.TemporaryDirectory() as t:
     (d / "sub").mkdir()
     (d / "sub" / "x").write_text("2")
     assert mod.fresh_dir(d) == d and d.is_dir() and not any(d.iterdir())
+
+    # 作業場所: /dev/shm が使えればそこに置き、.stress/run をリンクにする（前の実ディレクトリは置き換える）。使えなければ .stress/run
+    w = Path(t) / "prob"
+    (w / ".stress" / "run").mkdir(parents=True)
+    (w / ".stress" / "run" / "old.txt").write_text("old")
+    if mod.SHM.is_dir():
+        r = mod.work_root(w)
+        assert r.parent.parent == mod.SHM and (w / ".stress" / "run").is_symlink() and (w / ".stress" / "run").resolve() == r.resolve(), r
+        assert mod.work_root(w) == r  # 2 回目も同じ場所
+        import shutil
+        shutil.rmtree(r)
+    mod.SHM = Path(t) / "no_such_shm"
+    r = mod.work_root(w)
+    assert r == w / ".stress" / "run" and not r.is_symlink(), r
 PY
 
 # pch_acl.hpp 本体が無くても .gch だけで動き、フラグ不一致なら PCH なしでやり直す

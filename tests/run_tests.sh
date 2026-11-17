@@ -131,8 +131,9 @@ kind_is shrink_skips_gen_fail WA
 log_has shrink_gen_fail_warning shrink_skips_gen_fail '^warning: .*GEN_FAIL|^  GEN_FAIL'
 [ "$(head -1 in.txt)" -ge 6 ] 2>/dev/null && echo "ok   shrink_in_txt_is_real_failure" || { echo "FAIL shrink_in_txt_is_real_failure"; fail=1; }
 
-# 縮小中の Ctrl+C: 縮小をやめて、見つけた失敗を保存する
-check shrink_interrupt 1 python3 "$root/tests/limits/interrupt.py" "shrinking" "$root/stress.py" --seed 1
+# 縮小中の Ctrl+C: 縮小をやめて、見つけた失敗を保存する。Ctrl+C は「shrinking」の 1 秒後に送るので、
+# 縮小が必ずそれより長くかかるように、1 回ごとに待つ main_slow.cpp を使う
+check shrink_interrupt 1 python3 "$root/tests/limits/interrupt.py" "shrinking" "$root/stress.py" --seed 1 --main main_slow.cpp
 kind_is shrink_interrupt WA
 log_has shrink_interrupt_msg shrink_interrupt '^shrink interrupted'
 [ "$(head -1 in.txt)" -ge 6 ] 2>/dev/null && echo "ok   shrink_interrupt_in_txt" || { echo "FAIL shrink_interrupt_in_txt"; fail=1; }
@@ -296,7 +297,7 @@ cd "$work_s"
 check par_shrink_skips_gen_fail 1 st --seed 1 -j 4 --no-to-in
 kind_is par_shrink_skips_gen_fail WA
 log_has par_shrink_gen_fail_warning par_shrink_skips_gen_fail '^warning: .*GEN_FAIL|^  GEN_FAIL'
-check par_shrink_interrupt 1 python3 "$root/tests/limits/interrupt.py" "shrinking" "$root/stress.py" --seed 1 -j 4 --no-to-in
+check par_shrink_interrupt 1 python3 "$root/tests/limits/interrupt.py" "shrinking" "$root/stress.py" --seed 1 -j 4 --no-to-in --main main_slow.cpp
 kind_is par_shrink_interrupt WA
 log_has par_shrink_interrupt_msg par_shrink_interrupt '^shrink interrupted'
 

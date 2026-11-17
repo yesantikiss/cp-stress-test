@@ -111,7 +111,7 @@ random の形は範囲などの共通の条件だけを見る。
 - 道具の側の失敗: gen error は GEN_FAIL、checker が例外で落ちたら CHECKER_FAIL で、どちらも終了コード 2
 - 比較方法: `--cmp exact`、`--cmp float:EPS`（誤差の内と外、`0`、不正な指定で終了コード 2）、token で小数がずれたら WA
 - インタラクティブ: interactor の WA の直後に main が落ちても、10 回とも WA になる
-- 縮小: 縮小中に gen error が出ても本物の WA を残し、警告を出す。縮小中に Ctrl+C（SIGINT）を送ると、元の WA を保存して終了コード 1
+- 縮小: 縮小中に gen error が出ても本物の WA を残し、警告を出す。縮小中に Ctrl+C（SIGINT）を送ると、元の WA を保存して終了コード 1（縮小がすぐ終わらないよう、1 回ごとに待つ `main_slow.cpp` で確かめる）
 - 実行環境: 深さ 100 万の再帰が `st` でも `st bench` でも落ちない。出力し続ける main が `--output-limit` で止まって OLE（愚直解なら REF_OLE、`st bench` でも OLE）になり、保存された出力が上限以下。Ctrl+C で止めたあとに main が残らない
 - ビルド: リンクエラーの見分け（静的リンクのやり直し用）、作業ディレクトリの中身だけ消す `fresh_dir`、作業場所を `/dev/shm` に置いて `.stress/run` をリンクにすること（使えなければ `.stress/run`）、`--cxxflags` のクォート、`--cxxflags=-O0` の形、不正なクォートのエラー、空白や特殊文字を含む依存パス（`.d`）のキャッシュと更新検知、`pch_acl.hpp` 本体が無く `.gch` のフラグが合わないときの PCH なしやり直し、そのあと静的リンクなしでもやり直すとき `-include` が残らないこと（g++ は偽物）、日本語のリンクエラーも見分けること、最後に各テストのディレクトリで `st clean` を呼んで `/dev/shm` 側も消えること
 - 再現: `st repro` で同じ入力が出る。失敗時に表示された `st repro ...` に `--main` `--cmp` `--tl` `--cxxflags=...` が付き、そのまま打てば再現する

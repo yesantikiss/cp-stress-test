@@ -1198,7 +1198,18 @@ class Runner:
         return v2
 
 
-def resolve_jobs(jobs: int) -> int:
+def resolve_jobs(jobs: int | None) -> int:
+    if jobs is None:
+        # -j を書かなかったときは環境変数 STRESS_JOBS（~/.bashrc で自分の既定を決める用）、無ければ 1
+        env = os.environ.get("STRESS_JOBS", "").strip()
+        if not env:
+            return 1
+        try:
+            jobs = int(env)
+        except ValueError:
+            die(f"invalid STRESS_JOBS: {env!r} (expected an integer >= 0)")
+        if jobs < 0:
+            die(f"invalid STRESS_JOBS: {env!r} (expected an integer >= 0)")
     if jobs < 0:
         die("-j must be >= 0")
     if jobs == 0:
@@ -1633,8 +1644,8 @@ def parse(argv: list[str]) -> argparse.Namespace:
     p.add_argument("-t", "--time", type=float, help="回数の代わりに秒数で回す")
     p.add_argument("--seed", type=int, help="基準 seed（省略時はランダム）")
     p.add_argument("--max-cap", type=int, help="g.size() に渡す cap の上限")
-    p.add_argument("-j", "--jobs", type=int, nargs="?", const=0, default=1, metavar="N",
-                   help="N 本並列に回す。数を省くか 0 ならコア数 (default: 1)")
+    p.add_argument("-j", "--jobs", type=int, nargs="?", const=0, default=None, metavar="N",
+                   help="N 本並列に回す。数を省くか 0 ならコア数 (default: 環境変数 STRESS_JOBS、無ければ 1)")
     p.add_argument("--no-shrink", dest="shrink", action="store_false", help="失敗後の縮小をしない")
     p.add_argument("--shrink-tries", type=int, default=200, help="縮小で cap 1 つあたりに試す回数 (default: 200)")
     p.add_argument("--shrink-time", type=float, default=20.0, help="縮小にかける時間の上限 [s] (default: 20)")

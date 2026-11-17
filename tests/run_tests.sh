@@ -276,6 +276,14 @@ check par_ok        0 st --main main_ok.cpp -n 300 --seed 1 -j 4
 grep -q 'OK  300 cases' "$build_dir/par_ok.log" && echo "ok   par_ok_count" || { echo "FAIL par_ok_count"; fail=1; }
 check par_auto      0 st --main main_ok.cpp -n 50 --seed 1 -j
 check par_bad       2 st --main main_ok.cpp -j -1
+# -j を書かなければ STRESS_JOBS が既定。-j を書けばそちらが優先。サブコマンドにも影響しない
+check par_env       0 env STRESS_JOBS=3 python3 "$root/stress.py" --main main_ok.cpp -n 50 --seed 1
+log_has par_env_jobs par_env 'jobs=3'
+check par_env_override 0 env STRESS_JOBS=3 python3 "$root/stress.py" --main main_ok.cpp -n 50 --seed 1 -j 1
+if grep -q 'jobs=' "$build_dir/par_env_override.log"; then echo "FAIL par_env_override_serial"; fail=1; else echo "ok   par_env_override_serial"; fi
+check par_env_bad   2 env STRESS_JOBS=abc python3 "$root/stress.py" --main main_ok.cpp -n 5
+log_has par_env_bad_msg par_env_bad 'invalid STRESS_JOBS'
+check par_env_repro 0 env STRESS_JOBS=3 python3 "$root/stress.py" repro 1:1:gen --main main_ok.cpp
 check par_gen_fail  2 st --main main_ok.cpp --gen-file gen_bad.cpp --seed 1 -j 4
 log_has par_gen_fail_msg par_gen_fail '^GEN_FAIL '
 # 本当の TLE は単独で測り直しても TLE なので、そのまま失敗

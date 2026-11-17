@@ -117,7 +117,7 @@ random の形は範囲などの共通の条件だけを見る。
 - 再現: `st repro` で同じ入力が出る。失敗時に表示された `st repro ...` に `--main` `--cmp` `--tl` `--cxxflags=...` が付き、そのまま打てば再現する
 - in.txt: 失敗時の書き出し、手書きの in.txt の退避、`--no-to-in`、`st restore`
 - ジェネレーター: `-g` での選択（重複のまとめ、空指定）、`--big-iters`（`0` と負値）、STRESS_BIG の回数と終了後に次のジェネレーターを飛ばさないこと、`st make`、`st bench`、タグの表示
-- 並列実行（`-j`）: 同じ seed なら `-j 1` と `-j 4` で、保存されるケースと `found after N cases` が同じ（WA、RE、縮小あり・なし、checker、インタラクティブ）。並列でも子プロセスの上限が付く（OLE、深い再帰）、Ctrl+C で main が残らない、縮小中の gen error と Ctrl+C、STRESS_BIG の順番、本物の TLE はそのまま TLE、ほかの main と同時に動くと遅くなる main では単独で測り直して `-j 1` に切り替え、`-j -1` は終了コード 2
+- 並列実行（`-j`）: 同じ seed なら `-j 1` と `-j 4` で、保存されるケースと `found after N cases` が同じ（WA、RE、縮小あり・なし、checker、インタラクティブ）。並列でも子プロセスの上限が付く（OLE、深い再帰）、Ctrl+C で main が残らない、縮小中の gen error と Ctrl+C、STRESS_BIG の順番、本物の TLE はそのまま TLE、ほかの main と同時に動くと遅くなる main では単独で測り直して `-j 1` に切り替え、`-j -1` は終了コード 2、`STRESS_JOBS` が既定になり `-j` が優先、不正な `STRESS_JOBS` は終了コード 2、`STRESS_JOBS` があっても `st repro` は動く
 - `examples/adaptive/` と `examples/checker/` の例がそのまま OK で通る
 
 ## テストしていないもの

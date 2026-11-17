@@ -154,9 +154,9 @@ class BuildConfig:
             dirs.append(lib)
         return dirs
 
-    def flags(self, src: Path, use_pch: bool, static: bool = True) -> list[str]:
+    def flags(self, src: Path, use_pch: bool) -> list[str]:
         f = ["-std=gnu++20", "-O2", "-DLOCAL"]
-        if static and not self.sanitize:
+        if not self.sanitize:
             # 静的リンクにすると、起動のたびの動的リンク（libstdc++ の読み込み）が無くなり、1 回 0.5 ms ほど速く起動する。
             # 数 ms で終わるケースを何千回も回すときに効く。ASan は静的リンクできないので --san のときは付けない
             f.append("-static")
@@ -192,8 +192,8 @@ def build(cfg: BuildConfig, src: Path, name: str, use_pch: bool = True) -> Path:
     proc = subprocess.run(cmd, cwd=cfg.workdir, capture_output=True, text=True)
     if proc.returncode != 0 and use_pch and "-include" in flags and not (cfg.workdir / "pch_acl.hpp").exists() and "pch_acl.hpp:" in proc.stderr:
         # pch_acl.hpp 本体が無くフラグ不一致で .gch を使えなかったときは、PCH なしでやり直す
-        no_pch_flags = cfg.flags(src, False)
-        proc = subprocess.run(["g++", *no_pch_flags, str(src), "-o", str(exe), "-MMD", "-MF", str(dep)],
+        flags = cfg.flags(src, False)  # このあと静的リンクなしでやり直すときも PCH なしのまま
+        proc = subprocess.run(["g++", *flags, str(src), "-o", str(exe), "-MMD", "-MF", str(dep)],
                               cwd=cfg.workdir, capture_output=True, text=True)
     if proc.returncode != 0 and "-static" in flags and _link_error(proc.stderr):
         # libstdc++ や libc の静的ライブラリが無い環境では、静的リンクなしでやり直す（コンパイルエラーではやり直さない）
@@ -208,7 +208,8 @@ def build(cfg: BuildConfig, src: Path, name: str, use_pch: bool = True) -> Path:
 
 
 def _link_error(stderr: str) -> bool:
-    return "ld returned" in stderr or "cannot find -l" in stderr
+    # リンクで失敗すると gcc は collect2 の行を出す。「collect2」はロケールによらないので、日本語のメッセージでも拾える
+    return "collect2" in stderr or "ld returned" in stderr or "cannot find -l" in stderr
 
 
 def _parse_make_deps(exe: Path, text: str) -> list[str]:
@@ -1103,16 +1104,21 @@ class Runner:
 
         def take() -> tuple[int, Case] | None:
             nonlocal stopped
+            # pending のケースはどれも it から取り出し済みで、it の残りより番号が小さい。
+            # stopped（it からはもう取らない）になったあとでも、測り直しで pending に戻したケースは走らせる
+            if pending:
+                if best is not None and pending[0][0] > best[0]:
+                    pending.clear()  # 残りは全部 best より後ろ
+                    return None
+                idx, _, case = heapq.heappop(pending)
+                return idx, case
             if stopped:
                 return None
-            if pending:
-                idx, _, case = heapq.heappop(pending)
-            else:
-                try:
-                    idx, case = next(it)
-                except StopIteration:
-                    stopped = True
-                    return None
+            try:
+                idx, case = next(it)
+            except StopIteration:
+                stopped = True
+                return None
             if best is not None and idx > best[0]:
                 stopped = True  # これより後ろは要らない（番号は増える一方）
                 return None
@@ -1190,8 +1196,12 @@ class Runner:
         v2 = self.evaluate(case, d)
         if v2.kind in RECHECK:
             return v2
-        took = f"{v2.elapsed * 1000:.0f}ms" if v.kind == "TLE" else v2.kind
-        Out.log(Out.yellow("warning: ") + f"-j {self.jobs} では {v.kind} だったケースが単独では通った（{took}）。"
+        # 単独では時間内に終わった。OK とは限らない（WA や RE なら、その失敗として報告される）
+        if v2.kind == "OK":
+            what = f"単独では通った（{v2.elapsed * 1000:.0f}ms）" if v.kind == "TLE" else "単独では通った"
+        else:
+            what = f"単独では時間内に終わって {v2.kind} だった"
+        Out.log(Out.yellow("warning: ") + f"-j {self.jobs} では {v.kind} だったケースが{what}。"
                 "並列だと時間がぶれるので、ここからは -j 1 で回す")
         Out.log(Out.dim(f"  case={case.id}"))
         self.jobs = 1

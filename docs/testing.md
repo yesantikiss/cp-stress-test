@@ -113,11 +113,11 @@ random の形は範囲などの共通の条件だけを見る。
 - インタラクティブ: interactor の WA の直後に main が落ちても、10 回とも WA になる
 - 縮小: 縮小中に gen error が出ても本物の WA を残し、警告を出す。縮小中に Ctrl+C（SIGINT）を送ると、元の WA を保存して終了コード 1
 - 実行環境: 深さ 100 万の再帰が `st` でも `st bench` でも落ちない。出力し続ける main が `--output-limit` で止まって OLE（愚直解なら REF_OLE、`st bench` でも OLE）になり、保存された出力が上限以下。Ctrl+C で止めたあとに main が残らない
-- ビルド: リンクエラーの見分け（静的リンクのやり直し用）、作業ディレクトリの中身だけ消す `fresh_dir`、作業場所を `/dev/shm` に置いて `.stress/run` をリンクにすること（使えなければ `.stress/run`）、`--cxxflags` のクォート、`--cxxflags=-O0` の形、不正なクォートのエラー、空白や特殊文字を含む依存パス（`.d`）のキャッシュと更新検知、`pch_acl.hpp` 本体が無く `.gch` のフラグが合わないときの PCH なしやり直し
+- ビルド: リンクエラーの見分け（静的リンクのやり直し用）、作業ディレクトリの中身だけ消す `fresh_dir`、作業場所を `/dev/shm` に置いて `.stress/run` をリンクにすること（使えなければ `.stress/run`）、`--cxxflags` のクォート、`--cxxflags=-O0` の形、不正なクォートのエラー、空白や特殊文字を含む依存パス（`.d`）のキャッシュと更新検知、`pch_acl.hpp` 本体が無く `.gch` のフラグが合わないときの PCH なしやり直し、そのあと静的リンクなしでもやり直すとき `-include` が残らないこと（g++ は偽物）、日本語のリンクエラーも見分けること、最後に各テストのディレクトリで `st clean` を呼んで `/dev/shm` 側も消えること
 - 再現: `st repro` で同じ入力が出る。失敗時に表示された `st repro ...` に `--main` `--cmp` `--tl` `--cxxflags=...` が付き、そのまま打てば再現する
 - in.txt: 失敗時の書き出し、手書きの in.txt の退避、`--no-to-in`、`st restore`
 - ジェネレーター: `-g` での選択（重複のまとめ、空指定）、`--big-iters`（`0` と負値）、STRESS_BIG の回数と終了後に次のジェネレーターを飛ばさないこと、`st make`、`st bench`、タグの表示
-- 並列実行（`-j`）: 同じ seed なら `-j 1` と `-j 4` で、保存されるケースと `found after N cases` が同じ（WA、RE、縮小あり・なし、checker、インタラクティブ）。並列でも子プロセスの上限が付く（OLE、深い再帰）、Ctrl+C で main が残らない、縮小中の gen error と Ctrl+C、STRESS_BIG の順番、本物の TLE はそのまま TLE、ほかの main と同時に動くと遅くなる main では単独で測り直して `-j 1` に切り替え、`-j -1` は終了コード 2、`STRESS_JOBS` が既定になり `-j` が優先、不正な `STRESS_JOBS` は終了コード 2、`STRESS_JOBS` があっても `st repro` は動く
+- 並列実行（`-j`）: 同じ seed なら `-j 1` と `-j 4` で、保存されるケースと `found after N cases` が同じ（WA、RE、縮小あり・なし、checker、インタラクティブ）。並列でも子プロセスの上限が付く（OLE、深い再帰）、Ctrl+C で main が残らない、縮小中の gen error と Ctrl+C、STRESS_BIG の順番、本物の TLE はそのまま TLE、ほかの main と同時に動くと遅くなる main では単独で測り直して `-j 1` に切り替え、`-j -1` は終了コード 2、`STRESS_JOBS` が既定になり `-j` が優先、不正な `STRESS_JOBS` は終了コード 2、`STRESS_JOBS` があっても `st repro` は動く。偽の evaluate で、測り直しのために止めて戻したケースを取りこぼさないこと（it が尽きたあと、後ろの失敗が決まったあとの両方）と、単独で WA になったときの警告の文言
 - `examples/adaptive/` と `examples/checker/` の例がそのまま OK で通る
 
 ## テストしていないもの

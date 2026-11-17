@@ -154,8 +154,12 @@ class BuildConfig:
             dirs.append(lib)
         return dirs
 
-    def flags(self, src: Path, use_pch: bool) -> list[str]:
+    def flags(self, src: Path, use_pch: bool, static: bool = True) -> list[str]:
         f = ["-std=gnu++20", "-O2", "-DLOCAL"]
+        if static and not self.sanitize:
+            # 静的リンクにすると、起動のたびの動的リンク（libstdc++ の読み込み）が無くなり、1 回 0.5 ms ほど速く起動する。
+            # 数 ms で終わるケースを何千回も回すときに効く。ASan は静的リンクできないので --san のときは付けない
+            f.append("-static")
         f += [f"-I{d}" for d in self.include_dirs()]
         if self.sanitize:
             f += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-g", "-D_GLIBCXX_DEBUG"]
@@ -191,11 +195,20 @@ def build(cfg: BuildConfig, src: Path, name: str, use_pch: bool = True) -> Path:
         no_pch_flags = cfg.flags(src, False)
         proc = subprocess.run(["g++", *no_pch_flags, str(src), "-o", str(exe), "-MMD", "-MF", str(dep)],
                               cwd=cfg.workdir, capture_output=True, text=True)
+    if proc.returncode != 0 and "-static" in flags and _link_error(proc.stderr):
+        # libstdc++ や libc の静的ライブラリが無い環境では、静的リンクなしでやり直す（コンパイルエラーではやり直さない）
+        flags = [f for f in flags if f != "-static"]
+        proc = subprocess.run(["g++", *flags, str(src), "-o", str(exe), "-MMD", "-MF", str(dep)],
+                              cwd=cfg.workdir, capture_output=True, text=True)
     if proc.returncode != 0:
         Out.log(Out.red(f"build failed: {src.name}"))
         Out.log(proc.stderr.rstrip())
         raise BuildError(src.name)
     return exe
+
+
+def _link_error(stderr: str) -> bool:
+    return "ld returned" in stderr or "cannot find -l" in stderr
 
 
 def _parse_make_deps(exe: Path, text: str) -> list[str]:
@@ -513,8 +526,7 @@ class Case:
 
 def generate(progs: Programs, case: Case, d: Path, opt: argparse.Namespace) -> Verdict | None:
     """d/in.txt に入力を作る。失敗したら Verdict を返す。"""
-    g = run(progs.gen, None, d / "in.txt", d / "stderr_gen.txt", opt.gen_tl, d, case.gen_args(),
-            env={"STRESS_TAGS": str(d / "tags.txt")})
+    g = run(progs.gen, None, d / "in.txt", d / "stderr_gen.txt", opt.gen_tl, d, case.gen_args())
     if g.status != "OK":
         msg = (d / "stderr_gen.txt").read_text(errors="replace").strip()
         return Verdict("GEN_FAIL", f"[{case.name}] {g.status} ({describe_code(g.code)}) {msg}")
@@ -536,8 +548,17 @@ def read_tags(d: Path) -> list[str]:
 
 
 def fresh_dir(d: Path) -> Path:
-    if d.exists():
-        shutil.rmtree(d)  # 前のケースの出力が残らないように
+    """d を空にする（前のケースの出力が残らないように）。ディレクトリ自体は消さずに中身だけ消す（その方が速い）。"""
+    if d.is_dir() and not d.is_symlink():
+        with os.scandir(d) as it:
+            for e in it:
+                if e.is_dir(follow_symlinks=False):
+                    shutil.rmtree(e.path)
+                else:
+                    os.unlink(e.path)
+        return d
+    if d.is_symlink() or d.exists():
+        d.unlink()
     d.mkdir(parents=True)
     return d
 
@@ -680,7 +701,6 @@ def _kill(p: subprocess.Popen) -> None:
 def run_interactive(progs: Programs, d: Path, opt: argparse.Namespace) -> Verdict:
     """main と interactor の間に st が入って中継する。やり取りは d/transcript.txt に残る。"""
     report = d / "report_interactor.txt"
-    env = dict(os.environ, STRESS_REPORT=str(report))
     log = Transcript()
     main = inter = None
     check_cancel()
@@ -691,7 +711,7 @@ def run_interactive(progs: Programs, d: Path, opt: argparse.Namespace) -> Verdic
             main = subprocess.Popen([str(progs.main)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=em,
                                     cwd=d, start_new_session=True)
             inter = subprocess.Popen([str(progs.interactor), str(d / "in.txt")], stdin=subprocess.PIPE,
-                                     stdout=subprocess.PIPE, stderr=ei, cwd=d, start_new_session=True, env=env)
+                                     stdout=subprocess.PIPE, stderr=ei, cwd=d, start_new_session=True)
             _track(main)
             _track(inter)
         v = _interact(main, inter, start, log, report, d, opt)
@@ -1617,8 +1637,14 @@ def parse(argv: list[str]) -> argparse.Namespace:
     return opt
 
 
+# gen と interactor に渡すファイル名。子プロセスは作業ディレクトリ（ケースごとの d）で動くので相対パスで足りる。
+# ケースごとに環境変数の辞書を作って渡すと、起動のたびに全部の環境変数を変換し直して遅いので、最初に 1 回だけ設定する。
+CHILD_ENV = {"STRESS_TAGS": "tags.txt", "STRESS_REPORT": "report_interactor.txt"}
+
+
 def main(argv: list[str]) -> int:
     opt = parse(argv)
+    os.environ.update(CHILD_ENV)
     handler = {"run": cmd_run, "repro": cmd_repro, "make": cmd_make, "bench": cmd_bench,
                "last": cmd_last, "restore": cmd_restore, "clean": cmd_clean, "init": cmd_init}
     try:

@@ -278,7 +278,7 @@ st init gen2.cpp   # gen.cpp の雛形を gen2.cpp という名前で置く
 
 ## ビルド
 
-main、愚直解、gen、checker、interactor を並列にビルドする。フラグは `-std=gnu++20 -O2 -DLOCAL`。
+main、愚直解、gen、checker、interactor を並列にビルドする。フラグは `-std=gnu++20 -O2 -DLOCAL -static`（`--san` のときは `-static` なし）。
 
 | オプション | 内容 |
 | --- | --- |
@@ -287,6 +287,7 @@ main、愚直解、gen、checker、interactor を並列にビルドする。フ�
 
 - include パスには stress-test のディレクトリ（`stress/gen.hpp` などを読むため）、ACL、`$CP_LIBRARY_DIR`（既定 `~/cp-library`）を入れる。ACL は環境変数 `ACL_DIR`、なければ問題のディレクトリの `ac-library/` を使う（`atcoder/` を含むディレクトリを指す）。
 - 問題のディレクトリに `pch_acl.hpp.gch` があり、ソースが `#include <atcoder/...>` を含むときは、`-include pch_acl.hpp` を付けてプリコンパイル済みヘッダを使う。main と愚直解だけで、`--san` のときは使わない。`pch_acl.hpp` 本体が無くフラグ不一致で `.gch` を使えなかったときは、PCH なしで自動でやり直す。
+- `-static`（静的リンク）は、起動のたびの動的リンクを省いて 1 回 0.5 ms ほど速く起動するため。数 ms で終わるケースを何千回も回すときに効く。libstdc++ や libc の静的ライブラリが無くてリンクに失敗したときは、`-static` なしで自動でやり直す。
 - バイナリは `.stress/bin/<種類>-<ハッシュ>` に置く。ハッシュはソースのパスとフラグから作るので、`--san` の有無などで別のバイナリになる。
 - ソースか、それが include しているファイルが変わったときだけ再ビルドする。
 

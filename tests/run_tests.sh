@@ -400,6 +400,18 @@ for i in range(tr.HEAD + tr.TAIL + 3):
     tr.note(f"line-{i}")
 assert tr.dropped == 3, tr.dropped
 assert any("3 lines omitted" in ln for ln in tr.lines())
+
+assert mod._link_error("/usr/bin/ld: cannot find -lstdc++: No such file or directory\ncollect2: error: ld returned 1 exit status")
+assert not mod._link_error("main.cpp:3:5: error: 'foo' was not declared in this scope")
+
+import tempfile
+with tempfile.TemporaryDirectory() as t:
+    d = Path(t) / "case"
+    mod.fresh_dir(d)
+    (d / "in.txt").write_text("1")
+    (d / "sub").mkdir()
+    (d / "sub" / "x").write_text("2")
+    assert mod.fresh_dir(d) == d and d.is_dir() and not any(d.iterdir())
 PY
 
 # pch_acl.hpp 本体が無くても .gch だけで動き、フラグ不一致なら PCH なしでやり直す

@@ -212,6 +212,7 @@ auto a = g.seq(n, Range{-5, 5}, {.shape = SeqShape::edge});
 auto es = g.tree(n);                                        // 形は混ぜる
 auto es = g.tree(n, {.shape = TreeShape::path});
 auto es = g.tree(n, {.shape = TreeShape::star, .w = Range{1, 100}});
+auto es = g.tree(n, {.rooted = true});                      // 根を頂点 1 に固定する
 auto es = g.tree(n, {.ordered = true});                     // 各辺 u v を常に u < v で出す
 g.out(es);                                                  // 1 本 1 行で n-1 行
 ```
@@ -223,20 +224,21 @@ g.out(es);                                                  // 1 本 1 行で n-
 | オプション | 既定 | 意味 |
 | --- | --- | --- |
 | `.shape` | `TreeShape::mixed` | 木の形（下の表） |
+| `.rooted` | `false` | 根を頂点 1（`g.one_indexed = false` なら 0）に固定する。根以外の頂点番号はシャッフルする |
 | `.ordered` | `false` | 各辺 `u v` を常に `u < v` で出す。「u_i < v_i」の制約がある問題向け |
 | `.w` | なし | 重み（Range かラムダ） |
 
-| `.shape` | 形 |
-| --- | --- |
-| `TreeShape::random` | Prüfer 列から作る一様ランダムな木 |
-| `TreeShape::path` | パス（直線） |
-| `TreeShape::star` | スター（1 頂点に全部つながる） |
-| `TreeShape::caterpillar` | 長さ 1 から n/2 の背骨のパスに、残りの頂点を葉としてつける |
-| `TreeShape::binary` | 完全二分木 |
-| `TreeShape::deep` | 各頂点の親を直前の 1 から 3 頂点から選ぶ、深い木 |
-| `TreeShape::mixed`（省略時） | 上のどれかを選ぶ（random が 2/7、他は 1/7 ずつ） |
+| `.shape` | 形 | `.rooted = true` のときの根 |
+| --- | --- | --- |
+| `TreeShape::random` | Prüfer 列から作る一様ランダムな木 | ランダムな 1 頂点 |
+| `TreeShape::path` | パス（直線） | 端の 1 頂点（n >= 2 で次数 1） |
+| `TreeShape::star` | スター（1 頂点に全部つながる） | 中心（次数 n-1） |
+| `TreeShape::caterpillar` | 長さ 1 から n/2 の背骨のパスに、残りの頂点を葉としてつける | 背骨の端の 1 頂点（背骨が 1 頂点なら中心） |
+| `TreeShape::binary` | 完全二分木 | 二分木の根（次数 2 以下、深さ floor(log2 n)） |
+| `TreeShape::deep` | 各頂点の親を直前の 1 から 3 頂点から選ぶ、深い木 | 先頭の頂点（次数 3 以下、最大の深さ ceil((n-1)/3) 以上） |
+| `TreeShape::mixed`（省略時） | 上のどれかを選ぶ（random が 2/7、他は 1/7 ずつ） | 選ばれた形の根 |
 
-どの形でも、頂点番号はランダムに振り直し、辺の順番と各辺の `u v` の向きもシャッフルする（`.ordered` なら向きは `u < v` にそろえる）。なので path でも `1-2-3-...` の順には出ない。根を 1 にしたい問題では自分で番号を付け直す必要がある。
+どの形でも、頂点番号はランダムに振り直し、辺の順番と各辺の `u v` の向きもシャッフルする（`.ordered` なら向きは `u < v` にそろえる）。なので path でも `1-2-3-...` の順には出ない。根を頂点 1 に固定したい問題では `.rooted = true` を付ける（根以外の番号と辺の順番は変わらずシャッフルする）。
 
 ## 根付き木（親の列）
 
@@ -455,6 +457,7 @@ STRESS_GEN(zero) {
 | `parents` | 親は 1..n-1 | 親は 0..n-2 |
 | `parents` の `.ordered = false` | 1..n、根の親は 0 | 0..n-1、根の親は -1 |
 | `perm` | 1..n | 0..n-1 |
+| `tree` の `.rooted = true` の根 | 頂点 1 | 頂点 0 |
 | `digraph` / `dag` の `Reach::root` の根 | 頂点 1 | 頂点 0 |
 
 - 番号以外は変わらない。同じ seed なら、`false` のときの出力は `true` のときの番号からちょうど 1 引いたものになる。

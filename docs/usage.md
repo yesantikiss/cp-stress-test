@@ -15,7 +15,7 @@ st --tl 1 --san    # TL 1 秒、ASan / UBSan / _GLIBCXX_DEBUG
 st --cmp float:1e-6
 st repro SEED:CAP:NAME    # 失敗時に表示されたケースを再現
 st make max -n 5 -o cases/  # 入力ファイルだけ書き出す
-st bench max --tl 2       # 最大ケースで main の実行時間を測る（TLE なら終了コード 1）
+st bench max --tl 2       # 最大ケースで main の実行時間と最大メモリを測る（TLE なら終了コード 1）
 st last --to-in    # 直前の失敗を表示して in.txt にコピー
 st restore         # 退避した手書きの in.txt を戻す
 st clean           # 保存した失敗を消す
@@ -26,7 +26,7 @@ st clean           # 保存した失敗を消す
 | `st` / `st run` | ランダムテストを回す |
 | `st repro` | 失敗したケースを 1 つ再現する |
 | `st make` | 入力ファイルだけ書き出す |
-| `st bench` | 生成した入力で main の実行時間を測る |
+| `st bench` | 生成した入力で main の実行時間と最大メモリを測る |
 | `st last` | 直前の失敗を表示する |
 | `st restore` | 退避した手書きの in.txt を戻す |
 | `st clean` | `.stress/` の失敗ケースを消す |
@@ -37,8 +37,8 @@ st clean           # 保存した失敗を消す
 ## 基本の流れ
 
 1. `st init` で gen.cpp を置き、入力の生成を書く（[gen.cpp の書き方](gen.md)）。
-2. main.cpp と guchoku.cpp を書いて `st`。全部一致すれば `OK  1000 cases  max 3ms` のように出る。
-3. 失敗すると、判定、入力、両方の出力、stderr と、再現用のコマンドを出して止まる。gen がタグを付けていれば `tags:` の行も出る（[タグ](gen.md#タグ)）。失敗した入力は in.txt にも書き出す（[in.txt への書き出し](#intxt-への書き出し)）。
+2. main.cpp と guchoku.cpp を書いて `st`。全部一致すれば `OK  1000 cases  max 3ms` のように出る。終了時には答えとタグの分布も出る（[答えとタグの分布](#答えとタグの分布)）。
+3. 失敗すると、判定、入力、両方の出力、stderr と、再現用のコマンドを出して止まる。compare モードの WA で食い違いが 20 行目より後にあるときは、食い違った行の前後 3 行も行番号と `>` 付きで追加表示する。gen がタグを付けていれば `tags:` の行も出る（[タグ](gen.md#タグ)）。失敗した入力は in.txt にも書き出す（[in.txt への書き出し](#intxt-への書き出し)）。
 
 ```text
 WA  token 1: main='5' ref='6'
@@ -66,6 +66,7 @@ copied failing input -> in.txt
 | `--no-shrink` | 失敗したあと縮小しない |
 | `--shrink-tries N` | 縮小で cap 1 つあたりに試す回数（既定 200） |
 | `--shrink-time SEC` | 縮小にかける時間の上限（既定 20 秒） |
+| `--no-stats` | 終了時に答えとタグの分布を出さない（[答えとタグの分布](#答えとタグの分布)） |
 
 次のオプションは `st run` と `st repro` の両方で使える。
 
@@ -204,7 +205,7 @@ export STRESS_JOBS=2  # ~/.bashrc に書く。その場で st -j 4 や st -j 1 �
 | `exact` | バイト列が完全に同じか。違うときは最初に違うバイトの位置を出す |
 | `float` `float:EPS` | トークンごとに比べ、どちらも実数として読めれば `abs(main - ref) <= EPS * max(1, abs(ref))` なら同じとみなす（絶対誤差か相対誤差が EPS 以下）。EPS は 0 以上の有限の実数（省略時 1e-6）。実数として読めないトークンは文字列として比べる |
 
-WA の理由には、最初に違ったトークンの番号と両方の値、またはトークン数の違いが出る。
+WA の理由には、最初に違ったトークンの番号と両方の値、またはトークン数の違いが出る。先頭 20 行の表示に加えて、最初に食い違った位置が 20 行目より後のときは、main と愚直解それぞれで食い違った行の前後 3 行を行番号と `>` 付きで追加表示する（`st last` でも同じ表示が出る）。
 
 ## st repro
 
@@ -241,7 +242,7 @@ st make [NAME ...] [-n N] [--seed S] [--cap C] [-o DIR]
 st bench [NAME ...] [-n N] [--seed S] [--cap C] [--tl SEC] [--main SRC]
 ```
 
-生成した入力で main だけを走らせ、ケースごとの実行時間を出す。
+生成した入力で main だけを走らせ、ケースごとの実行時間と最大メモリ使用量（RSS、MB）を出す。
 
 | オプション | 内容 |
 | --- | --- |
@@ -254,7 +255,8 @@ st bench [NAME ...] [-n N] [--seed S] [--cap C] [--tl SEC] [--main SRC]
 ビルドのオプションも使える。
 
 - `--tl` の 8 割を超えたケースは黄色で出す。
-- TLE、RE、OLE が 1 つでもあれば終了コード 1、なければ一番遅かった時間を出して 0。
+- 最大メモリは `wait4` の `ru_maxrss` で測る。Linux では親プロセス（Python）の使用量より小さい値は親の値（十数〜数十 MB 程度）で下限が付く。
+- TLE、RE、OLE が 1 つでもあれば終了コード 1、なければ一番遅かった時間と最大のメモリ使用量を出して 0。
 - 使った入力は `.stress/bench/` に残る（次の `st bench` で消える）。
 
 ## st last
@@ -324,6 +326,22 @@ CXX_FLAGS+=(-include "$PCH_HDR")                                  # PCH（あれ
 CXX_FLAGS+=(-include "$HOME/cp-stress-test/stress/leftover.hpp")  # その後ろに足す
 g++ "${CXX_FLAGS[@]}" "$SOURCE_FILE"
 ```
+
+## 答えとタグの分布
+
+`st run` が終わったとき（OK でも失敗でも）、愚直解の出力の先頭トークンの分布と `g.tag` の件数を出す。1000 ケース通ったが実は全部 `No` だった、想定していた形が出ていなかった、といった偏りに気づくためのもの。
+
+```text
+OK  1000 cases  max 3ms  2.1s  base_seed=...
+答え: Yes 512 (51%), No 488 (49%)
+タグ: tree=random 298, tree=binary 144, tree=path 143, tree=star 142, tree=deep 138, tree=caterpillar 135
+```
+
+- **答え（先頭トークン）**: 愚直解を走らせたケースが 2 件以上あるときに対象になる（`--ref` なしの checker モードやインタラクティブでは出さない）。各ケースで愚直解の出力の最初の空白区切りトークンだけを読むので、初手が `Yes` / `No` で後ろに構成を続ける問題でも偏りを見つけられる。空出力は `(empty)` と数え、40 文字を超えるトークンは末尾を `...` で省略する。
+  - 種類数が 5 種類以下なら、全種類の件数と割合を多い順に出す。10 ケース以上で 1 種類しか出なかったときは `warning: 答え（先頭トークン）がすべて同じです: ...` と出す。
+  - 種類数が 6 種類以上（数値を出す問題など）のときは、10 ケース以上で最多のトークンが 8 割以上を占めたときだけ `warning: 答え（先頭トークン）が偏っています: ...` と出し、そうでなければ出さない。
+- **タグ**: `g.tag`（`g.tree` / `g.seq` などが自動で付ける形タグを含む）が使われたケース数を多い順に最大 10 種類まで出す（11 種類以上あるときは `他 N 種類`）。モードによらず出す。
+- `--no-stats` を付けるとどちらも出さない。
 
 ## st clean
 
@@ -400,7 +418,7 @@ main、愚直解、gen、checker、interactor を並列にビルドする。フ�
 | `stderr_checker.txt` `stdout_checker.txt` | checker の出力 |
 | `transcript.txt` `stderr_interactor.txt` | インタラクティブのやり取りと interactor の stderr |
 | `tags.txt` | gen が付けたタグ（`タグ<TAB>回数` を 1 行ずつ）。タグがあるときだけ |
-| `meta.json` | 判定、理由、seed、cap、ジェネレーター、タグ、再現コマンド、モード、比較方法、TL、ソースのパスと SHA-1、日時 |
+| `meta.json` | 判定、理由、食い違った行番号（compare の WA のとき）、seed、cap、ジェネレーター、タグ、再現コマンド、モード、比較方法、TL、ソースのパスと SHA-1、日時 |
 
 st が問題のディレクトリの in.txt を書くのは、失敗したとき（`--no-to-in` でなければ）と `st last --to-in`、`st restore` のときだけ。
 

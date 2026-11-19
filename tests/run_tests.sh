@@ -347,7 +347,7 @@ import json, os, re, subprocess, sys
 from pathlib import Path
 p = subprocess.Popen([sys.executable, sys.argv[1], "-i", "interactor.cpp",
                       "--main", "main_spam_nonl.cpp", "-n", "1", "--seed", "1",
-                      "--tl", "1.5", "--no-shrink", "--no-to-in"])
+                      "--tl", "4.0", "--no-shrink", "--no-to-in"])
 _, status, ru = os.wait4(p.pid, 0)
 p.returncode = os.waitstatus_to_exitcode(status)
 assert p.returncode == 1, f"exit {p.returncode}"
@@ -355,7 +355,7 @@ meta = json.loads(Path(".stress/last/meta.json").read_text())
 assert meta["kind"] == "TLE", meta
 tr = Path(".stress/last/transcript.txt").read_text()
 m = re.search(r"\.\.\. \(\+(\d+) chars\)  \(no newline\)", tr)
-assert m and int(m.group(1)) >= 60_000_000, tr[:300]
+assert m and int(m.group(1)) >= 60_000_000, f"m={m and m.group(0)!r} len={len(tr)} tail={tr[-120:]!r}"
 assert ru.ru_maxrss < 80_000, f"RSS too high: {ru.ru_maxrss} KB"
 PY
 

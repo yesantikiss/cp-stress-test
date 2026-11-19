@@ -1179,7 +1179,14 @@ static void test_output() {
     es.weighted = true;
     o.out(es);
     o.out_lines(std::vector<std::string>{"ab", "cd"});
-    CHECK(o.buffer() == "1 2 x c 3 4 yz\n\n1 2\n1 2 9\nab\ncd\n");
+    std::vector<bool> vb = {true, false, true};
+    const std::vector<bool> cvb = vb;
+    o.out(vb);
+    o.out(cvb);
+    o.out(vb[0], vb[1], cvb[2]);
+    o.out_lines(vb);
+    o.out_lines(std::vector<std::vector<bool>>{{true, false}, {false, true}});
+    CHECK(o.buffer() == "1 2 x c 3 4 yz\n\n1 2\n1 2 9\nab\ncd\n1 0 1\n1 0 1\n1 0 1\n1\n0\n1\n1 0\n0 1\n");
 }
 
 static void test_tags() {  // mixed で選ばれた形と、g.tag で付けたもの

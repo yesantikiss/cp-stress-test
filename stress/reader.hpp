@@ -83,9 +83,12 @@ class Reader {
 
     unsigned long long read_u64() {
         const std::string t = read_token();
-        if (t.empty() || t.size() > 20) fail("expected an unsigned integer, got \"" + t + "\"");
+        if (t.empty()) fail("expected an unsigned integer, got \"" + t + "\"");
         for (char ch : t)
             if (ch < '0' || ch > '9') fail("expected an unsigned integer, got \"" + t + "\"");
+        size_t nz = 0;
+        while (nz < t.size() && t[nz] == '0') ++nz;
+        if (t.size() - nz > 20) fail("integer out of 64-bit range: " + t);
         errno = 0;
         const unsigned long long v = std::strtoull(t.c_str(), nullptr, 10);
         if (errno == ERANGE) fail("integer out of 64-bit range: " + t);
@@ -94,12 +97,7 @@ class Reader {
 
     double read_double(double lo = -std::numeric_limits<double>::infinity(),
                        double hi = std::numeric_limits<double>::infinity()) {
-        const std::string t = read_token();
-        char* end = nullptr;
-        const double v = std::strtod(t.c_str(), &end);
-        if (end != t.c_str() + t.size() || !std::isfinite(v)) fail("expected a real number, got \"" + t + "\"");
-        if (v < lo || v > hi) fail("real number " + t + " is out of range");
-        return v;
+        return read_real<double>(lo, hi);
     }
 
     // 期待した語（"Yes" など）かどうか。大文字小文字は区別する。
@@ -134,7 +132,7 @@ class Reader {
                 x = static_cast<T>(read_int(static_cast<long long>(std::numeric_limits<T>::min()),
                                             static_cast<long long>(std::numeric_limits<T>::max())));
         } else if constexpr (std::is_floating_point_v<T>) {
-            x = static_cast<T>(read_double());
+            x = read_real<T>();
         } else {
             static_assert(sizeof(T) == 0, "Reader >> supports integers, floating point, char and std::string");
         }
@@ -154,6 +152,20 @@ class Reader {
     bool eof_ = false;
 
     static bool is_space(char c) { return c == ' ' || c == '\n' || c == '\r' || c == '\t'; }
+
+    template <class T>
+    T read_real(T lo = -std::numeric_limits<T>::infinity(),
+                T hi = std::numeric_limits<T>::infinity()) {
+        const std::string t = read_token();
+        char* end = nullptr;
+        T v;
+        if constexpr (std::is_same_v<T, float>) v = std::strtof(t.c_str(), &end);
+        else if constexpr (std::is_same_v<T, double>) v = std::strtod(t.c_str(), &end);
+        else v = std::strtold(t.c_str(), &end);
+        if (end != t.c_str() + t.size() || !std::isfinite(v)) fail("expected a real number, got \"" + t + "\"");
+        if (v < lo || v > hi) fail("real number " + t + " is out of range");
+        return v;
+    }
 
     // pos_ に 1 文字以上あるか。パイプなら届くまで待つ。
     bool available() {

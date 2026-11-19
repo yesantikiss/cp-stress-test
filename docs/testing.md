@@ -69,7 +69,7 @@ FAIL tle (exit 0, want 1)
 | `big` / `big_conversion` | 桁数、先頭の 0、範囲、進数の変換、`2^60-1` などの書き方 |
 | `prime` | 素数判定を 10^6 までのふるいと比べる。大きい素数と強擬素数、範囲内の素数が端も含めて全部出る、上に無いときは下を探す、`long long` の上端 |
 | `highly_composite` | 10^6 までは約数の個数を数えた結果と一致、10^18 以下で 156 個、最大が 897612484786617600、`long long` 全体で約数の個数が増え続ける |
-| `output` / `tags` | `g.out` の書式、タグの付き方 |
+| `output` / `tags` | `g.out` の書式（`std::vector<bool>` を含む）、タグの付き方 |
 | `gen_errors` | 矛盾した指定が gen error（終了コード 3）になる |
 
 形ごとの性質は「その形なら必ず成り立つ条件」で見ている。条件を満たしても、その形だと言い切れるわけではない。判定がゆるすぎないかは、ランダムな木やグラフや文字列が判定を通らないことで確かめている。
@@ -103,6 +103,7 @@ random の形は範囲などの共通の条件だけを見る。
 | `tie_by_seed` | 返事が同数なら seed で選び、同じ seed なら同じ |
 | `many_replies` / `fixed` / `state` | 返事の種類が多いとき、`Strategy::fixed`、`AdaptiveState` |
 | `to_text` | `std::string_view` を含む文字列化が 1 文字ずつに分解されないこと |
+| `reader` | `Reader >>` の `long double` 精度と `float` 範囲外、`read_u64` の先頭ゼロと範囲外 |
 
 ### st のテスト
 
@@ -110,10 +111,11 @@ random の形は範囲などの共通の条件だけを見る。
 
 - 判定: OK / WA / RE / TLE / OLE / REF_RE / REF_TLE / REF_OLE、checker（`-c`、`--ref`）、interactor（`-i`、適応的な interactor）
 - 道具の側の失敗: gen error は GEN_FAIL、checker が例外で落ちたら CHECKER_FAIL で、どちらも終了コード 2（`st repro` でも終了コード 2 で、`.stress/fail` に保存せず in.txt も変えない）
+- 引数とヘルプ: `--tl` `--ref-tl` `--checker-tl` `--gen-tl` `--output-limit` `-t` `--shrink-time` の 0 以下や `nan` / `inf`、`--max-cap` `--cap` `-n` `--shrink-tries` の 0 以下が終了コード 2 になり `in.txt` を変えないこと。`st --help` にサブコマンドの一覧が出ること
 - 比較方法: `--cmp exact`、`--cmp float:EPS`（誤差の内と外、`0`、不正な指定で終了コード 2）、token で小数がずれたら WA
-- インタラクティブ: interactor の WA の直後に main が落ちても、10 回とも WA になる。`it.send(std::string_view(...))` が 1 つの文字列として送られる
-- 縮小: 縮小中に gen error が出ても本物の WA を残し、警告を出す。縮小中に Ctrl+C（SIGINT）を送ると、元の WA を保存して終了コード 1（縮小がすぐ終わらないよう、1 回ごとに待つ `main_slow.cpp` で確かめる）
-- 実行環境: 深さ 100 万の再帰が `st` でも `st bench` でも落ちない。出力し続ける main が `--output-limit` で止まって OLE（愚直解なら REF_OLE、`st bench` でも OLE）になり、保存された出力が上限以下。Ctrl+C で止めたあとに main が残らない
+- インタラクティブ: interactor の WA の直後に main が落ちても、10 回とも WA になる。`it.send(std::string_view(...))` が 1 つの文字列として送られる。改行なしで数十 MB 出力する main でも TLE で止まり `st` のメモリが増え続けないこと（`Transcript.feed` の単体チェックも含む）。`report_interactor.txt` の壊れた行の扱い
+- 縮小: 縮小中に gen error が出ても本物の WA を残し、警告を出す。縮小中に Ctrl+C（SIGINT）を送ると、元の WA を保存して終了コード 1（縮小がすぐ終わらないよう、1 回ごとに待つ `main_slow.cpp` で確かめる）。`n >= 20` でだけ落ちる `main_n20.cpp` で大きい cap から 2 段階縮小により cap 20 前後まで縮むこと。2 段階縮小の単体チェック（1 回目・2 回目の動作、中断時の復元、`-j 1` と `-j 4` の一致、ステータス表示の間引き）
+- 実行環境: 深さ 100 万の再帰が `st` でも `st bench` でも落ちない。出力し続ける main が `--output-limit` で止まって OLE（愚直解なら REF_OLE、`st bench` でも OLE）になり、保存された出力も上限以下。Ctrl+C で止めたあとに main が残らない
 - ビルド: リンクエラーの見分け（静的リンクのやり直し用）、作業ディレクトリの中身だけ消す `fresh_dir`、作業場所を `/dev/shm` に置いて `.stress/run` をリンクにすること（使えなければ `.stress/run`）、`--cxxflags` のクォート、`--cxxflags=-O0` の形、不正なクォートのエラー、空白や特殊文字を含む依存パス（`.d`）のキャッシュと更新検知、`pch_acl.hpp` 本体が無く `.gch` のフラグが合わないときの PCH なしやり直し、そのあと静的リンクなしでもやり直すとき `-include` が残らないこと（g++ は偽物）、日本語のリンクエラーも見分けること、最後に各テストのディレクトリで `st clean` を呼んで `/dev/shm` 側も消えること
 - 再現: `st repro` で同じ入力が出る。失敗時に表示された `st repro ...` に `--main` `--cmp` `--tl` `--cxxflags=...` `--no-leftover` が付き、そのまま打てば再現する
 - in.txt: 失敗時の書き出し、手書きの in.txt の退避、`--no-to-in`、`st restore`

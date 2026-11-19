@@ -58,8 +58,10 @@ class Output {
     void write_scalar(const T& x) {
         if constexpr (std::is_same_v<T, char>) {
             buf_ += x;
-        } else if constexpr (std::is_same_v<T, bool>) {
-            buf_ += x ? '1' : '0';
+        } else if constexpr (std::is_same_v<T, bool> ||
+                             std::is_same_v<T, std::vector<bool>::reference> ||
+                             std::is_same_v<T, std::vector<bool>::const_reference>) {
+            buf_ += static_cast<bool>(x) ? '1' : '0';
         } else if constexpr (std::is_integral_v<T> || std::is_floating_point_v<T>) {
             char tmp[64];
             auto res = std::to_chars(tmp, tmp + sizeof(tmp), x);

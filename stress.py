@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import argparse
+import codecs
 import contextlib
 import datetime as dt
 import hashlib
@@ -40,6 +41,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections import deque
@@ -690,13 +692,21 @@ class Transcript:
         self.head: list[str] = []
         self.tail: deque[str] = deque(maxlen=self.TAIL)
         self.dropped = 0
-        self.partial = {">": b"", "<": b""}
+        self.dec = {">": codecs.getincrementaldecoder("utf-8")("replace"),
+                    "<": codecs.getincrementaldecoder("utf-8")("replace")}
+        self.partial = {">": "", "<": ""}
+        self.extra = {">": 0, "<": 0}    # WIDTH を超えて捨てた文字数
+        self.tail_cr = {">": 0, "<": 0}  # 捨てた分の末尾に続く '\r' の数（直後に '\n' が来たら落とす用）
         self.last = ""  # 最後に記録した行の向き
         self.lock = threading.Lock()
 
-    def _line(self, mark: str, text: str) -> None:
+    def _line(self, mark: str, text: str, extra: int = 0, suffix: str = "") -> None:
         if len(text) > self.WIDTH:
-            text = text[:self.WIDTH] + f" ... (+{len(text) - self.WIDTH} chars)"
+            extra += len(text) - self.WIDTH
+            text = text[:self.WIDTH]
+        if extra:
+            text += f" ... (+{extra} chars)"
+        text += suffix
         self.last = mark
         line = f"{mark} {text}"
         if len(self.head) < self.HEAD:
@@ -706,18 +716,53 @@ class Transcript:
             self.dropped += 1
         self.tail.append(line)
 
+    def _feed_text(self, mark: str, chunk: str) -> None:
+        *lines, rest = chunk.split("\n")
+        for ln in lines:
+            if self.extra[mark] or self.tail_cr[mark]:
+                s = ln.rstrip("\r")
+                if s:
+                    extra = self.extra[mark] + self.tail_cr[mark] + len(s)
+                    text = self.partial[mark]
+                else:
+                    extra = self.extra[mark]
+                    text = self.partial[mark] if extra else self.partial[mark].rstrip("\r")
+                self._line(mark, text, extra)
+                self.partial[mark], self.extra[mark], self.tail_cr[mark] = "", 0, 0
+            elif self.partial[mark]:
+                self._line(mark, (self.partial[mark] + ln).rstrip("\r"))
+                self.partial[mark] = ""
+            else:
+                self._line(mark, ln.rstrip("\r"))
+        if rest:
+            rem = self.WIDTH - len(self.partial[mark])
+            if rem > 0:
+                self.partial[mark] += rest[:rem]
+            if len(rest) > rem:
+                over = rest[rem:]
+                s = over.rstrip("\r")
+                cr = len(over) - len(s)
+                if s:
+                    self.extra[mark] += self.tail_cr[mark] + len(s)
+                    self.tail_cr[mark] = cr
+                else:
+                    self.tail_cr[mark] += cr
+
     def feed(self, mark: str, data: bytes) -> None:
         with self.lock:
-            *lines, rest = (self.partial[mark] + data).split(b"\n")
-            for ln in lines:
-                self._line(mark, ln.decode(errors="replace").rstrip("\r"))
-            self.partial[mark] = rest
+            chunk = self.dec[mark].decode(data, final=False)
+            if chunk:
+                self._feed_text(mark, chunk)
 
     def finish(self, mark: str) -> None:
         with self.lock:
-            if self.partial[mark]:
-                self._line(mark, self.partial[mark].decode(errors="replace") + "  (no newline)")
-                self.partial[mark] = b""
+            tail = self.dec[mark].decode(b"", final=True)
+            if tail:
+                self._feed_text(mark, tail)
+            extra = self.extra[mark] + self.tail_cr[mark]
+            if self.partial[mark] or extra:
+                self._line(mark, self.partial[mark], extra, suffix="  (no newline)")
+                self.partial[mark], self.extra[mark], self.tail_cr[mark] = "", 0, 0
 
     def note(self, text: str) -> None:
         with self.lock:
@@ -732,6 +777,23 @@ class Transcript:
     def lines(self) -> list[str]:
         mid = [f"... ({self.dropped} lines omitted) ..."] if self.dropped else []
         return self.head + mid + list(self.tail)
+
+
+def read_interactor_report(path: Path) -> tuple[int, int] | None:
+    """interactor が書いた report_interactor.txt を (queries, limit) に読む。壊れていれば None。"""
+    if not path.exists():
+        return None
+    info: dict[str, str] = {}
+    for ln in path.read_text(errors="replace").splitlines():
+        parts = ln.split(None, 1)
+        if len(parts) == 2:
+            info[parts[0]] = parts[1]
+    if not info:
+        return None
+    try:
+        return int(info.get("queries", 0)), int(info.get("limit", -1))
+    except ValueError:
+        return None
 
 
 def _pump(src, dst, mark: str, log: Transcript) -> None:
@@ -874,9 +936,7 @@ def _interact(main: subprocess.Popen, inter: subprocess.Popen, start: float, log
     elif v.kind != "OK" and last_msg:
         log.note(f"[interactor] {last_msg}")
     (d / "transcript.txt").write_text("\n".join(log.lines()) + "\n")
-    if report.exists():
-        info = dict(ln.split(None, 1) for ln in report.read_text().splitlines() if ln.strip())
-        v.queries = (int(info.get("queries", 0)), int(info.get("limit", -1)))
+    v.queries = read_interactor_report(report)
     return v
 
 
@@ -1041,43 +1101,99 @@ LEFTOVER_LABEL = {"main": "main", "ref": "guchoku"}
 TOOL_FAILURES = ("GEN_FAIL", "CHECKER_FAIL", "INTERACTOR_FAIL")  # 道具の側のバグ。解答の失敗としては扱わない
 
 
+SHRINK_PROBE = 10  # 1 回目の縮小で cap ごとに試す回数
+
+
 def shrink(runner: "Runner", case: Case, opt: argparse.Namespace, deadline: float
            ) -> tuple[tuple[Case, Verdict, Path] | None, list[tuple[Case, Verdict]]]:
     """同じ生成器で cap を小さくして、失敗する入力を探し直す。
 
+    2 回に分けて探す。1 回目は小さい cap から SHRINK_PROBE 回ずつ試し、最初に落ちた cap を仮の答えにする。
+    2 回目は仮の答えより小さい cap だけ（1 回目で落ちなければ全部）を opt.shrink_tries 回まで試す。
     返り値は (見つかった失敗とその作業ディレクトリ or None, 途中で出た道具の側の失敗)。GEN_FAIL などは解答の失敗ではないので
     採用せずに飛ばし、縮小を続ける（あとで警告として出す）。-j のときは候補を並列に試し、番号が一番小さい失敗を採る。
     """
     cap = case.cap or 1
     caps = sorted({c for c in [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 25, 32, 40, 50, 64, 80, 100] if c < cap}
                   | ({cap // 2, cap * 3 // 4} - {0, cap}))
+    if not caps:
+        return None, []
     base = splitmix64(case.seed ^ 0x5EED)
-    tool_failures: list[tuple[int, Case, Verdict]] = []
+    probe = min(SHRINK_PROBE, opt.shrink_tries)
 
-    def candidates():
-        for c in caps:
-            for t in range(opt.shrink_tries):
-                if time.monotonic() > deadline:
-                    return
-                yield Case(case_seed(base, c * 1_000_003 + t), c, case.name)
+    def is_fail(v: Verdict) -> bool:
+        return v.kind != "OK" and v.kind not in TOOL_FAILURES
 
-    def on_result(idx: int, cand: Case, v: Verdict) -> None:
-        if v.kind in TOOL_FAILURES:
-            tool_failures.append((idx, cand, v))
-        Out.status(f"shrinking: cap={cand.cap} try {idx % opt.shrink_tries + 1}/{opt.shrink_tries}")
+    def run_pass(pass_caps: list[int], start_t: int, end_t: int, stage: str
+                 ) -> tuple[tuple[int, Case, Verdict, Path] | None, list[tuple[Case, Verdict]], bool]:
+        span = end_t - start_t
+        tool_failures: list[tuple[int, Case, Verdict]] = []
+        last_status = 0.0
 
-    found = None
-    try:
-        found = runner.search(candidates(), lambda v: v.kind != "OK" and v.kind not in TOOL_FAILURES, on_result)
-    except KeyboardInterrupt:
+        def candidates():
+            for c in pass_caps:
+                for t in range(start_t, end_t):
+                    if time.monotonic() > deadline:
+                        return
+                    yield Case(case_seed(base, c * 1_000_003 + t), c, case.name)
+
+        def on_result(idx: int, cand: Case, v: Verdict) -> None:
+            nonlocal last_status
+            if v.kind in TOOL_FAILURES:
+                tool_failures.append((idx, cand, v))
+            now = time.monotonic()
+            if now - last_status > 0.1:
+                prefix = f"shrinking ({stage})" if stage else "shrinking"
+                Out.status(f"{prefix}: cap={cand.cap} try {start_t + idx % span + 1}/{end_t}")
+                last_status = now
+
+        found = None
+        interrupted = False
+        try:
+            found = runner.search(candidates(), is_fail, on_result)
+        except KeyboardInterrupt:
+            interrupted = True
+        limit = found[0] if found else math.inf
+        tools = [(c, v) for i, c, v in sorted(tool_failures, key=lambda x: x[0]) if i < limit]
+        return found, tools, interrupted
+
+    found1, tools1, interrupted1 = run_pass(caps, 0, probe, "1/2" if probe < opt.shrink_tries else "")
+    if interrupted1:
         # 縮小は待ちきれずに止めることがあるので、Ctrl+C は「縮小をやめる」にして元の失敗を残す
         Out.log(Out.yellow("shrink interrupted") + "  縮小をやめて、見つけた失敗をそのまま保存する")
-    limit = found[0] if found else math.inf
-    tools = [(c, v) for i, c, v in sorted(tool_failures, key=lambda x: x[0]) if i < limit]
-    if found is None:
-        return None, tools
-    _, cand, v, d = found
-    return (cand, v, d), tools
+        return None, tools1
+
+    caps2 = [c for c in caps if c < found1[1].cap] if found1 else caps
+    if not caps2 or probe >= opt.shrink_tries or time.monotonic() > deadline:
+        if found1 is None:
+            return None, tools1
+        _, cand1, v1, d1 = found1
+        return (cand1, v1, d1), tools1
+
+    if found1 is None:
+        found2, tools2, interrupted2 = run_pass(caps2, probe, opt.shrink_tries, "2/2")
+        if interrupted2:
+            Out.log(Out.yellow("shrink interrupted") + "  縮小をやめて、見つけた失敗をそのまま保存する")
+        if found2 is None:
+            return None, tools1 + tools2
+        _, cand2, v2, d2 = found2
+        return (cand2, v2, d2), tools1 + tools2
+
+    _, cand1, v1, d1 = found1
+    with tempfile.TemporaryDirectory() as tmp:
+        snap = Path(tmp) / "best"
+        shutil.copytree(d1, snap)
+        runner.release(d1)  # jobs == 1 でも 2 回目が走れるように作業場所を戻す
+        found2, tools2, interrupted2 = run_pass(caps2, probe, opt.shrink_tries, "2/2")
+        if interrupted2:
+            Out.log(Out.yellow("shrink interrupted") + "  縮小をやめて、これまでに見つけた一番小さい失敗を保存する")
+        if found2 is not None:
+            _, cand2, v2, d2 = found2
+            return (cand2, v2, d2), tools1 + tools2
+        if d1.exists():
+            shutil.rmtree(d1)
+        shutil.copytree(snap, d1)
+        return (cand1, v1, d1), tools1 + tools2
 
 
 # ---------------------------------------------------------------- 並列実行
@@ -1671,11 +1787,31 @@ def cmd_init(opt: argparse.Namespace) -> int:
 # ---------------------------------------------------------------- 引数
 
 
+def positive_float(s: str) -> float:
+    try:
+        v = float(s)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid float value: {s!r}")
+    if not math.isfinite(v) or v <= 0:
+        raise argparse.ArgumentTypeError(f"must be > 0: {s}")
+    return v
+
+
+def positive_int(s: str) -> int:
+    try:
+        v = int(s)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid int value: {s!r}")
+    if v < 1:
+        raise argparse.ArgumentTypeError(f"must be >= 1: {s}")
+    return v
+
+
 def add_build(p: argparse.ArgumentParser) -> None:
     p.add_argument("--gen-file", default="gen.cpp", help="ジェネレータのソース (default: gen.cpp)")
     p.add_argument("--san", action="store_true", help="AddressSanitizer / UBSan / _GLIBCXX_DEBUG でビルド")
     p.add_argument("--cxxflags", default=os.environ.get("STRESS_CXXFLAGS", ""), help="追加のコンパイルフラグ")
-    p.add_argument("--gen-tl", type=float, default=10.0, help="gen の制限時間 [s] (default: 10)")
+    p.add_argument("--gen-tl", type=positive_float, default=10.0, help="gen の制限時間 [s] (default: 10)")
 
 
 def add_common(p: argparse.ArgumentParser) -> None:
@@ -1687,9 +1823,9 @@ def add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--ref", action="store_true", help="checker モードでも愚直解を走らせ、出力を第 3 引数で渡す")
     p.add_argument("-i", "--interactor", metavar="SRC", nargs="?", const="interactor.cpp",
                    help="インタラクティブ。SRC を省略すると interactor.cpp（例: -i / -i foo.cpp）。愚直解は使わない")
-    p.add_argument("--tl", type=float, default=2.0, help="main の制限時間 [s] (default: 2)")
-    p.add_argument("--ref-tl", type=float, default=10.0, help="愚直解の制限時間 [s] (default: 10)")
-    p.add_argument("--checker-tl", type=float, default=10.0, help="checker / interactor の制限時間 [s] (default: 10)")
+    p.add_argument("--tl", type=positive_float, default=2.0, help="main の制限時間 [s] (default: 2)")
+    p.add_argument("--ref-tl", type=positive_float, default=10.0, help="愚直解の制限時間 [s] (default: 10)")
+    p.add_argument("--checker-tl", type=positive_float, default=10.0, help="checker / interactor の制限時間 [s] (default: 10)")
     add_output_limit(p)
     p.add_argument("--cmp", default=None, help="比較方法: token (default) / exact / float[:EPS]")
     p.add_argument("--no-to-in", dest="to_in", action="store_false",
@@ -1703,15 +1839,15 @@ def add_no_leftover(p: argparse.ArgumentParser) -> None:
 
 
 def add_output_limit(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--output-limit", type=float, default=64.0, metavar="MB",
+    p.add_argument("--output-limit", type=positive_float, default=64.0, metavar="MB",
                    help="main と愚直解が書ける出力（stdout と stderr それぞれ）の上限 [MB] (default: 64)")
 
 
 def add_cases(p: argparse.ArgumentParser, count: int) -> None:
     p.add_argument("names", nargs="*", help="生成器の名前（省略時は STRESS_BIG のもの、無ければ全部）")
-    p.add_argument("-n", "--count", type=int, default=count, help=f"生成器ごとの個数 (default: {count})")
+    p.add_argument("-n", "--count", type=positive_int, default=count, help=f"生成器ごとの個数 (default: {count})")
     p.add_argument("--seed", type=int, help="基準 seed（省略時はランダム）")
-    p.add_argument("--cap", type=int, help="g.size() の上限（省略時は上限なし）")
+    p.add_argument("--cap", type=positive_int, help="g.size() の上限（省略時は上限なし）")
 
 
 def parse(argv: list[str]) -> argparse.Namespace:
@@ -1722,21 +1858,32 @@ def parse(argv: list[str]) -> argparse.Namespace:
     ap = argparse.ArgumentParser(prog="st", description="ランダムテストのドライバ")
     sub = ap.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("run", help="ランダムテストを回す（既定）")
+    run_epilog = "\n".join([
+        "サブコマンド (st <コマンド> --help で詳細):",
+        "  repro     SEED:CAP:NAME のケースを 1 つ再現する",
+        "  make      入力ファイルだけ書き出す",
+        "  bench     生成した入力で main の実行時間を測る",
+        "  last      直前の失敗を表示する",
+        "  restore   退避した手書きの in.txt（.stress/in.txt.bak）を戻す",
+        "  clean     .stress/ の失敗ケースを消す",
+        "  init      gen.cpp（と checker.cpp / interactor.cpp）の雛形を置く",
+    ])
+    p = sub.add_parser("run", help="ランダムテストを回す（既定）", epilog=run_epilog,
+                       formatter_class=argparse.RawDescriptionHelpFormatter)
     add_common(p)
     p.add_argument("-g", "--gen", dest="gens", action="append", metavar="NAME",
                    help="使う生成器（複数可、カンマ区切りも可。省略時は STRESS_BIG 以外を順番に）")
-    p.add_argument("-n", "--iters", type=int, help="回数 (default: 1000)")
+    p.add_argument("-n", "--iters", type=positive_int, help="回数 (default: 1000)")
     p.add_argument("--big-iters", type=int, default=20,
                    help="-n / -t を書かないとき、STRESS_BIG の生成器 1 つあたりの回数 (default: 20)")
-    p.add_argument("-t", "--time", type=float, help="回数の代わりに秒数で回す")
+    p.add_argument("-t", "--time", type=positive_float, help="回数の代わりに秒数で回す")
     p.add_argument("--seed", type=int, help="基準 seed（省略時はランダム）")
-    p.add_argument("--max-cap", type=int, help="g.size() に渡す cap の上限")
+    p.add_argument("--max-cap", type=positive_int, help="g.size() に渡す cap の上限")
     p.add_argument("-j", "--jobs", type=int, nargs="?", const=0, default=None, metavar="N",
                    help="N 本並列に回す。数を省くか 0 ならコア数 (default: 環境変数 STRESS_JOBS、無ければ 1)")
     p.add_argument("--no-shrink", dest="shrink", action="store_false", help="失敗後の縮小をしない")
-    p.add_argument("--shrink-tries", type=int, default=200, help="縮小で cap 1 つあたりに試す回数 (default: 200)")
-    p.add_argument("--shrink-time", type=float, default=20.0, help="縮小にかける時間の上限 [s] (default: 20)")
+    p.add_argument("--shrink-tries", type=positive_int, default=200, help="縮小で cap 1 つあたりに試す回数 (default: 200)")
+    p.add_argument("--shrink-time", type=positive_float, default=20.0, help="縮小にかける時間の上限 [s] (default: 20)")
 
     p = p_repro = sub.add_parser("repro", help="SEED:CAP:NAME のケースを 1 つ再現する")
     add_common(p)
@@ -1751,7 +1898,7 @@ def parse(argv: list[str]) -> argparse.Namespace:
     add_build(p)
     add_cases(p, 3)
     p.add_argument("--main", default="main.cpp", help="解答 (default: main.cpp)")
-    p.add_argument("--tl", type=float, default=2.0, help="制限時間 [s] (default: 2)")
+    p.add_argument("--tl", type=positive_float, default=2.0, help="制限時間 [s] (default: 2)")
     add_output_limit(p)
     add_no_leftover(p)
 

@@ -1242,7 +1242,7 @@ cat > main_bigmem.cpp << 'EOF'
 int main() {
     int x;
     std::cin >> x;
-    std::vector<char> buf(40 << 20, 1);  // 40 MB 確保して全ページに触る
+    std::vector<char> buf(64 << 20, 1);  // 64 MB 確保して全ページに触る
     long long s = 0;
     for (size_t i = 0; i < buf.size(); i += 4096) s += buf[i];
     std::cout << (s + x) << "\n";
@@ -1261,7 +1261,8 @@ def max_mb(p):
     return float(m.group(1))
 small = max_mb(sys.argv[1])
 big = max_mb(sys.argv[2])
-assert big >= 30.0 and big - small >= 20.0, (small, big)
+# Linux の wait4(ru_maxrss) は親プロセス（Python）の RSS で下限が付くため、64 MB 確保との差で確かめる
+assert big >= 55.0 and big - small >= 25.0, (small, big)
 PY
 
 # 後片付け: テストで使った各ディレクトリで st clean を呼び、/dev/shm 側の作業場所も消えることを確かめる

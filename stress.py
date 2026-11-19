@@ -946,6 +946,8 @@ def judge_flags(opt: argparse.Namespace) -> str:
             flags += [name, sval]
     if getattr(opt, "san", False):
         flags.append("--san")
+    if not getattr(opt, "leftover", True):
+        flags.append("--no-leftover")
     return "".join(" " + shlex.quote(f) for f in flags)
 
 
@@ -1521,6 +1523,10 @@ def cmd_repro(opt: argparse.Namespace) -> int:
         Out.log(Out.green("OK") + f"  case={case.id} (再現しなかった)")
         Out.log(Out.dim("input: .stress/run/in.txt"))
         return EXIT_OK
+    if v.kind in TOOL_FAILURES:
+        Out.log(Out.red(v.kind) + f"  {v.detail}")
+        Out.log(Out.dim(f"case={case.id}"))
+        return EXIT_ERROR
     dest = save_failure(workdir, run_dir, case, v, opt, sources)
     meta = json.loads((dest / "meta.json").read_text())
     show_failure(dest, v, case.id, meta["repro"], workdir)
@@ -1550,7 +1556,11 @@ def cmd_make(opt: argparse.Namespace) -> int:
         dst = outdir / f"{case.name}-{idx:02d}.txt"
         shutil.copy2(tmp / "in.txt", dst)
         size = dst.stat().st_size
-        Out.log(f"{dst.relative_to(workdir)}  {size / 1024:.1f}KB  " + Out.dim(f"case={case.id}"))
+        try:
+            rel = dst.relative_to(workdir)
+        except ValueError:
+            rel = dst
+        Out.log(f"{rel}  {size / 1024:.1f}KB  " + Out.dim(f"case={case.id}"))
     shutil.rmtree(tmp, ignore_errors=True)
     return EXIT_OK
 

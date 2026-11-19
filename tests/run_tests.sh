@@ -98,6 +98,13 @@ case "$repro_cmd_cxx" in
     *) echo "FAIL repro_cmd_cxxflags ($repro_cmd_cxx)"; fail=1 ;;
 esac
 check repro_cmd_cxxflags_reproduces 1 st ${repro_cmd_cxx#st }
+st --main main_wa.cpp --no-leftover --seed 1 --no-to-in >/dev/null 2>&1
+repro_cmd_nolo="$(python3 -c 'import json;print(json.load(open(".stress/last/meta.json"))["repro"])')"
+case "$repro_cmd_nolo" in
+    *"--no-leftover"*) echo "ok   repro_cmd_no_leftover" ;;
+    *) echo "FAIL repro_cmd_no_leftover ($repro_cmd_nolo)"; fail=1 ;;
+esac
+check repro_cmd_no_leftover_reproduces 1 st ${repro_cmd_nolo#st } --no-to-in
 
 # repro: 直前の失敗の seed:cap で同じ入力が出る
 st --main main_wa.cpp --seed 7 >/dev/null 2>&1
@@ -109,6 +116,16 @@ check repro_c_swap 1 st repro --main main_wa.cpp -c "$case_id"
 if cmp -s .stress/last/in.txt "$build_dir/expected_in.txt"; then echo "ok   repro_same_input"; else echo "FAIL repro_same_input"; fail=1; fi
 check last_to_in 0 st last --to-in
 if cmp -s in.txt "$build_dir/expected_in.txt"; then echo "ok   to_in_copied"; else echo "FAIL to_in_copied"; fail=1; fi
+# repro で道具の側の失敗（GEN_FAIL / CHECKER_FAIL）が起きたら終了コード 2、保存せず in.txt も変えない
+fail_before="$(ls -1 .stress/fail | wc -l)"
+cp in.txt "$build_dir/in_before_tool_fail.txt"
+check repro_gen_fail 2 st repro 5:2 --main main_ok.cpp --gen-file gen_bad.cpp
+log_has repro_gen_fail_msg repro_gen_fail '^GEN_FAIL '
+check repro_checker_crash 2 st repro 5:2 -c checker_crash.cpp --main main_ok.cpp
+log_has repro_checker_crash_msg repro_checker_crash '^CHECKER_FAIL '
+fail_after="$(ls -1 .stress/fail | wc -l)"
+if [ "$fail_before" -eq "$fail_after" ]; then echo "ok   repro_tool_fail_no_save"; else echo "FAIL repro_tool_fail_no_save ($fail_before -> $fail_after)"; fail=1; fi
+if cmp -s in.txt "$build_dir/in_before_tool_fail.txt"; then echo "ok   repro_tool_fail_keeps_in"; else echo "FAIL repro_tool_fail_keeps_in"; fail=1; fi
 
 # 失敗すると in.txt に自動で書き出す。手書きの in.txt だけ退避し、失敗が続いても残る
 printf 'hand written\n' > in.txt
@@ -185,6 +202,9 @@ grep -q 'OK  0 cases' "$build_dir/multi_big_zero.log" && echo "ok   multi_big_ze
 check multi_big_neg     2 st --main main_ok.cpp -g max --big-iters -1
 check make              0 st make max all_same -n 2 --seed 3 -o cases
 if [ "$(ls cases | wc -l)" -eq 4 ]; then echo "ok   make_files"; else echo "FAIL make_files"; fail=1; fi
+rm -rf "$build_dir/make_abs"
+check make_abs          0 st make max -n 1 --seed 3 -o "$build_dir/make_abs"
+if [ -f "$build_dir/make_abs/max-01.txt" ]; then echo "ok   make_abs_file"; else echo "FAIL make_abs_file"; fail=1; fi
 check bench_ok          0 st bench --main main_ok.cpp -n 1 --seed 3
 check bench_tle         1 st bench --main main_slow.cpp -n 1 --seed 3 --tl 0.5
 
@@ -214,7 +234,41 @@ check inter_repro   1 st repro "$(python3 -c 'import json;print(json.load(open("
 check inter_with_c  2 st -i interactor.cpp -c checker.cpp --main main_ok.cpp
 check inter_init    0 st init -i --force
 check inter_adaptive_ok    0 st -i interactor_adaptive.cpp --main main_ok.cpp -n 300 --seed 1
-check inter_adaptive_guess 1 st -i interactor_adaptive.cpp --main main_guess.cpp -n 300 --seed 1
+check inter_adaptive_guess 1 st -i interactor_adaptive.cpp --main main_guess.cpp --seed 1 -n 300
+# it.send に std::string_view / std::string / const char* を渡しても 1 つの文字列として送られる
+cat > interactor_sv.cpp << 'EOF'
+#include <string>
+#include <string_view>
+#include "stress/interact.hpp"
+void interact(Interactor& it) {
+    int n, x;
+    it.in >> n >> x;
+    it.send(n);
+    it.query_limit(25);
+    while (true) {
+        std::string t;
+        it.out >> t;
+        if (t == "?") {
+            int y;
+            it.out >> y;
+            it.ensure(1 <= y && y <= n, "y is out of range");
+            it.count_query();
+            const char* raw = x <= y ? "Yes" : "No";
+            if (it.queries() % 3 == 1) it.send(std::string_view(raw));
+            else if (it.queries() % 3 == 2) it.send(std::string(raw));
+            else it.send(raw);
+        } else if (t == "!") {
+            int ans;
+            it.out >> ans;
+            it.ensure(ans == x, "wrong answer");
+            return;
+        } else {
+            it.wrong("unknown command: " + t);
+        }
+    }
+}
+EOF
+check inter_string_view 0 st -i interactor_sv.cpp --main main_ok.cpp -n 50 --seed 1
 
 # examples/adaptive の例がそのまま通る
 for ex in guess sort tree arc184_a; do
@@ -562,6 +616,8 @@ work_lo="$build_dir/leftover"
 rm -rf "$work_lo" && cp -r "$root/tests/leftover" "$work_lo" && cd "$work_lo"
 python3 -c "print(200000); print(' '.join(['7'] * 200000)); print('extra')" > in_big.txt
 python3 -c "print(200000); print(' '.join(['7'] * 200000))" > in_bigok.txt
+python3 -c "print(1); print(1); print('a' * 100)" > in_longtok.txt
+printf '1\n1\n10 20 30 40 50\n\n' > in_five.txt
 leftover_case() {  # leftover_case <名前> <プログラム> <入力> <want: yes/no> [<stderr に含まれるはずの文字列>]
     local name="$1" exe="$2" in="$3" want="$4" pat="${5:-}" err out
     err="$("./$exe" < "$in" 2>&1 >/dev/null)"
@@ -578,10 +634,16 @@ for p in read_cin read_fast read_scanf read_exit; do
         || { echo "FAIL leftover_build_$p"; tail -20 "$p.build.log"; fail=1; lo_built=0; }
 done
 if [ "$lo_built" -eq 1 ]; then
+    long_want="3 行目から（残り 1 行）: $(python3 -c "print('a' * 77 + '...')")"
     for p in read_cin read_fast read_scanf read_exit; do
         leftover_case "leftover_${p}_multi"   "$p" in_multi.txt   yes "3 行目から（残り 1 行）: 5 3 2"
         leftover_case "leftover_${p}_midline" "$p" in_midline.txt yes "2 行目から（残り 2 行）: 4 5 6 7 8 ..."
         leftover_case "leftover_${p}_big"     "$p" in_big.txt     yes "3 行目から（残り 1 行）: extra"
+        leftover_case "leftover_${p}_longtok" "$p" in_longtok.txt yes "$long_want"
+        leftover_case "leftover_${p}_five"    "$p" in_five.txt    yes "3 行目から（残り 1 行）: 10 20 30 40 50"
+        # ちょうど 5 トークンのときは末尾に "..." を付けない
+        err="$("./$p" < in_five.txt 2>&1 >/dev/null)"
+        if [[ "$err" != *"..."* ]]; then echo "ok   leftover_${p}_five_no_dots"; else echo "FAIL leftover_${p}_five_no_dots ($err)"; fail=1; fi
         leftover_case "leftover_${p}_ok"      "$p" in_ok.txt      no
         leftover_case "leftover_${p}_bigok"   "$p" in_bigok.txt   no
         # パイプのときは調べない（st -i の対話で止まらないように）
@@ -595,6 +657,27 @@ if g++ -std=gnu++20 -O2 -x c++-header pch/pch.hpp -o pch/pch.hpp.gch 2>/dev/null
     if g++ -std=gnu++20 -O2 -Winvalid-pch -H -include pch/pch.hpp -include "$root/stress/leftover.hpp" read_cin.cpp -o read_pch 2>pch.log \
         && grep -q '^! .*pch.hpp.gch' pch.log; then echo "ok   leftover_with_pch"; else echo "FAIL leftover_with_pch"; head -5 pch.log; fail=1; fi
 fi
+# グローバルに int stat[10]; を持つ main.cpp でも leftover.hpp と衝突せずビルドして動く
+cat > main_stat.cpp << 'EOF'
+#include <bits/stdc++.h>
+int stat[10];
+int main() {
+    std::ios::sync_with_stdio(false);
+    std::cin.tie(nullptr);
+    stat[0] = 1;
+    int t;
+    std::cin >> t;
+    while (t--) {
+        int n;
+        std::cin >> n;
+        std::vector<long long> a(n);
+        for (auto& x : a) std::cin >> x;
+        std::cout << std::accumulate(a.begin(), a.end(), 0LL) << "\n";
+    }
+}
+EOF
+check leftover_stat_symbol 0 st --main main_stat.cpp --guchoku guchoku_ok.cpp -n 5 --seed 1
+log_lacks leftover_stat_symbol_clean leftover_stat_symbol '読み残し'
 # st: main も愚直解も T を n と読み違えて OK になるが、読み残しの警告が出る
 check leftover_run 0 st -n 50 --seed 1
 log_has leftover_run_main leftover_run 'main が 50 ケース中 50 ケースで入力を読み残しています'

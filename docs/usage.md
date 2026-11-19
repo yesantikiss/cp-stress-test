@@ -213,8 +213,8 @@ st repro SEED:CAP:NAME [run と同じオプション]
 ```
 
 - 失敗時の `case=...` をそのまま渡す。CAP を `-` にすると上限なし、NAME を省略すると先頭のジェネレーターを使う。
-- 再現すれば失敗として保存し、表示する（終了コード 1）。再現しなければ `OK ... (再現しなかった)` と入力の場所を出す（終了コード 0）。
-- 失敗時に表示される `st repro ...` には、そのとき使ったオプションのうち既定値と違うものが付く（`-c` / `-i`、`--ref`、`--main`、`--guchoku`、`--gen-file`、`--cmp`、`--tl`、`--ref-tl`、`--checker-tl`、`--gen-tl`、`--output-limit`、`--san`、`--cxxflags`）。なのでそのまま打てば同じ条件で再現する。
+- 再現すれば失敗として保存し、表示する（終了コード 1）。再現しなければ `OK ... (再現しなかった)` と入力の場所を出す（終了コード 0）。GEN_FAIL、CHECKER_FAIL、INTERACTOR_FAIL のときは保存も in.txt への書き出しもせず、終了コード 2 を返す。
+- 失敗時に表示される `st repro ...` には、そのとき使ったオプションのうち既定値と違うものが付く（`-c` / `-i`、`--ref`、`--main`、`--guchoku`、`--gen-file`、`--cmp`、`--tl`、`--ref-tl`、`--checker-tl`、`--gen-tl`、`--output-limit`、`--san`、`--cxxflags`、`--no-leftover`）。なのでそのまま打てば同じ条件で再現する。
 - `st repro -c SEED:CAP:NAME` のように `-c` / `-i` の直後にケースを書くと、argparse の上ではケースが SRC として読まれる。この形（数字で始まり `:` で区切ったもの）は st がケースとして扱い直し、SRC は既定の checker.cpp / interactor.cpp にする。
 
 ## st make

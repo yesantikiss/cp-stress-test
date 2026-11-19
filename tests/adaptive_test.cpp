@@ -125,6 +125,94 @@ static void test_to_text() {  // string_view も 1 文字ずつに分解せず�
     CHECK(adaptive_detail::to_text(std::pair<std::string_view, int>{"ok", 3}) == "(ok, 3)");
 }
 
+static void test_reader() {  // long double 精度、float の範囲外、read_u64 の先頭ゼロと範囲外
+    auto read_ok = [](std::string_view s, auto fn) {
+        int p[2];
+        CHECK_OR(pipe(p) == 0, return);
+        std::size_t off = 0;
+        while (off < s.size()) {
+            ssize_t n = write(p[1], s.data() + off, s.size() - off);
+            if (n <= 0) break;
+            off += static_cast<std::size_t>(n);
+        }
+        close(p[1]);
+        Reader r = Reader::stream(p[0], "output", kWrong);
+        fn(r);
+        close(p[0]);
+    };
+    auto read_fails = [](std::string_view s, auto fn, std::string_view err_sub = "") {
+        std::fflush(stdout);
+        std::fflush(stderr);
+        int ep[2];
+        if (pipe(ep) != 0) return false;
+        const pid_t pid = fork();
+        if (pid == 0) {
+            close(ep[0]);
+            dup2(ep[1], 2);
+            close(ep[1]);
+            int ip[2];
+            if (pipe(ip) != 0) _exit(99);
+            ssize_t ignored = write(ip[1], s.data(), s.size());
+            (void)ignored;
+            close(ip[1]);
+            Reader r = Reader::stream(ip[0], "output", kWrong);
+            fn(r);
+            _exit(0);
+        }
+        close(ep[1]);
+        std::string err;
+        char buf[256];
+        for (ssize_t n; (n = read(ep[0], buf, sizeof(buf))) > 0;) err.append(buf, static_cast<std::size_t>(n));
+        close(ep[0]);
+        int status = 0;
+        waitpid(pid, &status, 0);
+        return WIFEXITED(status) && WEXITSTATUS(status) == kWrong &&
+               (err_sub.empty() || err.find(err_sub) != std::string::npos);
+    };
+
+    // float / double / long double
+    read_ok("3.25 1e-100 1.5 1e-400", [](Reader& r) {
+        float f1 = 0, f2 = 1;
+        double d1 = 0, d2 = 1;
+        r >> f1 >> f2 >> d1 >> d2;
+        CHECK(f1 == 3.25f && f2 == 0.0f && d1 == 1.5 && d2 == 0.0);
+        r.expect_eof();
+    });
+    if constexpr (std::numeric_limits<long double>::digits10 >= 18) {
+        read_ok("1.000000000000000001", [](Reader& r) {
+            long double ld = 0;
+            r >> ld;
+            CHECK(ld != 1.0L && std::fabs(ld - 1.000000000000000001L) < 1e-18L);
+        });
+    }
+    if constexpr (std::numeric_limits<long double>::max_exponent10 >= 1000) {
+        read_ok("1e1000", [](Reader& r) {
+            long double ld = 0;
+            r >> ld;
+            CHECK(std::isfinite(ld) && ld > 1e308L);
+        });
+    }
+    CHECK(read_fails("1e100", [](Reader& r) { float f; r >> f; }));
+    CHECK(read_fails("-1e100", [](Reader& r) { float f; r >> f; }));
+    CHECK(read_fails("inf", [](Reader& r) { float f; r >> f; }));
+    CHECK(read_fails("nan", [](Reader& r) { float f; r >> f; }));
+    CHECK(read_fails("1e400", [](Reader& r) { double d; r >> d; }));
+    CHECK(read_fails("1e10000", [](Reader& r) { long double ld; r >> ld; }));
+
+    // read_u64: 先頭ゼロを含む 21 桁以上でも 64 bit に収まれば読める。範囲外は out of 64-bit range
+    read_ok("0000000000000000000001 0000000000000000000000000 00018446744073709551615", [](Reader& r) {
+        unsigned long long a = 0, b = 1, c = 0;
+        r >> a >> b >> c;
+        CHECK(a == 1ULL && b == 0ULL && c == std::numeric_limits<unsigned long long>::max());
+        r.expect_eof();
+    });
+    CHECK(read_fails("18446744073709551616", [](Reader& r) { (void)r.read_u64(); }, "out of 64-bit range"));
+    CHECK(read_fails("100000000000000000000", [](Reader& r) { (void)r.read_u64(); }, "out of 64-bit range"));
+    CHECK(read_fails("+1", [](Reader& r) { (void)r.read_u64(); }, "expected an unsigned integer"));
+    CHECK(read_fails("-1", [](Reader& r) { (void)r.read_u64(); }, "expected an unsigned integer"));
+    CHECK(read_fails("12a", [](Reader& r) { (void)r.read_u64(); }, "expected an unsigned integer"));
+}
+
 int main(int argc, char** argv) {
     return testing::run_tests(argc, argv,
                               {
@@ -136,5 +224,6 @@ int main(int argc, char** argv) {
                                   {"fixed", test_fixed},
                                   {"state", test_state},
                                   {"to_text", test_to_text},
+                                  {"reader", test_reader},
                               });
 }

@@ -83,6 +83,38 @@ check cxxflags_bad 2 st --main main_ok.cpp --cxxflags='-DFOO="abc'
 log_has cxxflags_bad_msg cxxflags_bad 'invalid --cxxflags'
 check cxxflags_eq_short 0 st --main main_ok.cpp -n 3 --seed 1 --cxxflags=-g3
 
+# 引数の検証（正の数・1 以上。外れたら終了コード 2 で in.txt も変えない）
+printf 'keep me\n' > in.txt
+check arg_tl_neg         2 st --main main_ok.cpp --tl -1
+check arg_tl_zero        2 st --main main_ok.cpp --tl 0
+check arg_tl_nan         2 st --main main_ok.cpp --tl nan
+check arg_tl_inf         2 st --main main_ok.cpp --tl inf
+check arg_ref_tl_zero    2 st --main main_ok.cpp --ref-tl 0
+check arg_checker_tl_neg 2 st --main main_ok.cpp --checker-tl -0.5
+check arg_gen_tl_zero    2 st --main main_ok.cpp --gen-tl 0
+check arg_outlim_zero    2 st --main main_ok.cpp --output-limit 0
+check arg_outlim_neg     2 st --main main_ok.cpp --output-limit -1
+check arg_time_zero      2 st --main main_ok.cpp -t 0
+check arg_time_neg       2 st --main main_ok.cpp -t -1
+check arg_max_cap_zero   2 st --main main_ok.cpp --max-cap 0
+check arg_iters_zero     2 st --main main_ok.cpp -n 0
+check arg_shrink_tries_0 2 st --main main_ok.cpp --shrink-tries 0
+check arg_shrink_time_0  2 st --main main_ok.cpp --shrink-time 0
+check arg_make_n_zero    2 st make -n 0
+check arg_make_cap_zero  2 st make --cap 0
+check arg_bench_n_zero   2 st bench -n 0
+check arg_bench_cap_zero 2 st bench --cap 0
+check arg_bench_tl_neg   2 st bench --tl -1
+check arg_repro_tl_zero  2 st repro 1:1 --tl 0
+[ "$(cat in.txt)" = "keep me" ] && echo "ok   arg_invalid_keeps_in" || { echo "FAIL arg_invalid_keeps_in"; fail=1; }
+rm -f in.txt
+
+# st --help にサブコマンドの一覧が出る
+check help_subcommands 0 st --help
+for cmd in repro make bench last restore clean init; do
+    log_has "help_has_$cmd" help_subcommands "^  $cmd "
+done
+
 # 表示された st repro をそのまま打てば再現する（--main / --cmp / --tl も付く）
 st --main main_ok.cpp --cmp exact --tl 1.5 --seed 1 >/dev/null 2>&1
 repro_cmd="$(python3 -c 'import json;print(json.load(open(".stress/last/meta.json"))["repro"])')"
@@ -157,6 +189,23 @@ check shrink_interrupt 1 python3 "$root/tests/limits/interrupt.py" "shrinking" "
 kind_is shrink_interrupt WA
 log_has shrink_interrupt_msg shrink_interrupt '^shrink interrupted'
 [ "$(head -1 in.txt)" -ge 6 ] 2>/dev/null && echo "ok   shrink_interrupt_in_txt" || { echo "FAIL shrink_interrupt_in_txt"; fail=1; }
+
+# 2 段階縮小: n >= 20 でだけ落ちる main_n20.cpp が大きい cap（61）で見つかったあと、
+# 短い --shrink-time でも 1 回目の縮小で cap 20 まで縮む（1 段階縮小だと cap 1..16 の 2000 回で時間切れになる）
+check shrink_n20 1 st --gen-file gen_large.cpp --main main_n20.cpp --seed 19000 --shrink-time 5 --no-to-in
+kind_is shrink_n20 WA
+log_has shrink_n20_shrunk shrink_n20 '^shrunk: cap [4-9][0-9] -> 20$'
+shrink_n20_info="$(python3 -c '
+import json, re, sys
+log = open(sys.argv[1]).read()
+m = json.load(open(".stress/last/meta.json"))
+n = int(open(".stress/last/in.txt").readline())
+mt = re.search(r"found after \d+ cases \(([0-9.]+)s\)", log)
+elapsed = float(mt.group(1)) if mt else 999.0
+cap = m["cap"]
+print(f"elapsed={elapsed:.1f}s cap={cap} n={n}")
+sys.exit(0 if elapsed < 20.0 and cap <= 25 and n >= 20 else 1)
+' "$build_dir/shrink_n20.log")" && echo "ok   shrink_n20_result ($shrink_n20_info)" || { echo "FAIL shrink_n20_result ($shrink_n20_info)"; fail=1; }
 
 # 子プロセスの上限と後始末
 work_l="$build_dir/limits"
@@ -269,6 +318,46 @@ void interact(Interactor& it) {
 }
 EOF
 check inter_string_view 0 st -i interactor_sv.cpp --main main_ok.cpp -n 50 --seed 1
+# 改行なしで数十 MB 出力する main でも TLE で止まり、st のメモリが増え続けない
+cat > main_spam_nonl.cpp << 'EOF'
+#include <chrono>
+#include <iostream>
+#include <string>
+#include <thread>
+#include <unistd.h>
+int main() {
+    int n;
+    if (!(std::cin >> n)) return 0;
+    std::string chunk(1 << 16, ' ');
+    for (int i = 0; i < 1024; ++i) {  // 64 MB を改行なしで出す
+        size_t off = 0;
+        while (off < chunk.size()) {
+            ssize_t w = ::write(1, chunk.data() + off, chunk.size() - off);
+            if (w <= 0) return 0;
+            off += static_cast<size_t>(w);
+        }
+    }
+    std::this_thread::sleep_for(std::chrono::seconds(10));
+}
+EOF
+# ビルドのピークメモリ（g++）が測る値に混ざらないよう、先に 1 回ビルドだけ済ませておく
+st -i interactor.cpp --main main_spam_nonl.cpp -n 1 --seed 1 --tl 0.2 --no-shrink --no-to-in >/dev/null 2>&1 || true
+check inter_nonl_spam 0 python3 - "$root/stress.py" << 'PY'
+import json, os, re, subprocess, sys
+from pathlib import Path
+p = subprocess.Popen([sys.executable, sys.argv[1], "-i", "interactor.cpp",
+                      "--main", "main_spam_nonl.cpp", "-n", "1", "--seed", "1",
+                      "--tl", "1.5", "--no-shrink", "--no-to-in"])
+_, status, ru = os.wait4(p.pid, 0)
+p.returncode = os.waitstatus_to_exitcode(status)
+assert p.returncode == 1, f"exit {p.returncode}"
+meta = json.loads(Path(".stress/last/meta.json").read_text())
+assert meta["kind"] == "TLE", meta
+tr = Path(".stress/last/transcript.txt").read_text()
+m = re.search(r"\.\.\. \(\+(\d+) chars\)  \(no newline\)", tr)
+assert m and int(m.group(1)) >= 60_000_000, tr[:300]
+assert ru.ru_maxrss < 80_000, f"RSS too high: {ru.ru_maxrss} KB"
+PY
 
 # examples/adaptive の例がそのまま通る
 for ex in guess sort tree arc184_a; do
@@ -467,12 +556,49 @@ for i in range(tr.HEAD + tr.TAIL + 3):
 assert tr.dropped == 3, tr.dropped
 assert any("3 lines omitted" in ln for ln in tr.lines())
 
+# Transcript.feed: 改行なしの大量出力で partial が WIDTH を超えない（CRLF 分割・UTF-8 分割・finish を含む）
+tr2 = mod.Transcript()
+chunk = b"a" * (1 << 16)
+for _ in range(160):  # 10 MB 改行なし
+    tr2.feed(">", chunk)
+    assert len(tr2.partial[">"]) <= tr2.WIDTH
+tr2.feed(">", b"\r\n")
+assert tr2.lines() == [f"> {'a' * tr2.WIDTH} ... (+{160 * (1 << 16) - tr2.WIDTH} chars)"], tr2.lines()
+
+tr3 = mod.Transcript()
+tr3.feed(">", b"b" * tr3.WIDTH)
+tr3.feed(">", b"\r")
+tr3.feed(">", b"\n")  # 境界をまたぐ \r\n は extra に数えない
+tr3.feed(">", "あ".encode()[:2])
+tr3.feed(">", "あ".encode()[2:] + b"\n")  # 境界をまたぐマルチバイト UTF-8
+tr3.feed("<", b"c" * (tr3.WIDTH + 50))
+tr3.finish("<")
+assert tr3.lines() == [
+    f"> {'b' * tr3.WIDTH}",
+    "> あ",
+    f"< {'c' * tr3.WIDTH} ... (+50 chars)  (no newline)",
+], tr3.lines()
+
 assert mod._link_error("/usr/bin/ld: cannot find -lstdc++: No such file or directory\ncollect2: error: ld returned 1 exit status")
 assert mod._link_error("/usr/bin/ld: -lstdc++ が見つかりません: そのようなファイルやディレクトリはありません\ncollect2: エラー: ld はステータス 1 で終了しました")
 assert not mod._link_error("main.cpp:3:5: error: 'foo' was not declared in this scope")
 
 import tempfile
 with tempfile.TemporaryDirectory() as t:
+    # read_interactor_report: 壊れた行を飛ばし、値が壊れていれば None
+    rp = Path(t) / "report.txt"
+    assert mod.read_interactor_report(rp) is None
+    rp.write_text("queries 7\nlimit 25\n")
+    assert mod.read_interactor_report(rp) == (7, 25)
+    rp.write_text("queries 7\ngarbage_only_one_col\nlimit 25\n")
+    assert mod.read_interactor_report(rp) == (7, 25)
+    rp.write_text("only_one_col\n")
+    assert mod.read_interactor_report(rp) is None
+    rp.write_text("queries not_an_int\nlimit 25\n")
+    assert mod.read_interactor_report(rp) is None
+    rp.write_text("")
+    assert mod.read_interactor_report(rp) is None
+
     d = Path(t) / "case"
     mod.fresh_dir(d)
     (d / "in.txt").write_text("1")
@@ -493,6 +619,96 @@ with tempfile.TemporaryDirectory() as t:
     mod.SHM = Path(t) / "no_such_shm"
     r = mod.work_root(w)
     assert r == w / ".stress" / "run" and not r.is_symlink(), r
+PY
+
+# 2 段階縮小の単体チェック（1 回目で仮の答えを取り、2 回目でさらに縮む / 見つからず・中断で 1 回目を残す / 1 回目不発 / -j 1 == -j 4 / status 間引き）
+check py_shrink 0 python3 -B - "$root" "$build_dir/py_shrink" << 'PY'
+import importlib.util, shutil, sys, time, types
+from pathlib import Path
+
+root = Path(sys.argv[1])
+work = Path(sys.argv[2])
+spec = importlib.util.spec_from_file_location("stress_mod", root / "stress.py")
+mod = importlib.util.module_from_spec(spec)
+sys.modules["stress_mod"] = mod
+spec.loader.exec_module(mod)
+logs = []
+status_calls = 0
+mod.Out.log = lambda *a: logs.append(" ".join(map(str, a)))
+def count_status(*a):
+    global status_calls
+    status_calls += 1
+mod.Out.status = count_status
+
+orig = mod.Case(12345, 50, "g")
+base = mod.splitmix64(orig.seed ^ 0x5EED)
+opt = types.SimpleNamespace(shrink_tries=30)
+
+def seed_of(c, t):
+    return mod.case_seed(base, c * 1_000_003 + t)
+
+def run_case_shrink(tag, jobs, judge_fn):
+    d_root = work / f"{tag}_j{jobs}"
+    shutil.rmtree(d_root, ignore_errors=True)
+    d_root.mkdir(parents=True)
+    def ev(case, d):
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "in.txt").write_text(f"{case.seed}:{case.cap}")
+        return judge_fn(case)
+    r = mod.Runner(d_root, jobs, ev)
+    try:
+        shrunk, tools = mod.shrink(r, orig, opt, time.monotonic() + 30.0)
+        saved_in = (shrunk[2] / "in.txt").read_text() if shrunk else None
+    finally:
+        r.close()
+    return (None if shrunk is None else (shrunk[0], shrunk[1].kind, saved_in)), [(c.id, v.kind) for c, v in tools]
+
+# 1. 1 回目で cap=20、2 回目で cap=12 が見つかる（-j 1 と -j 4 が一致）
+target_p1 = seed_of(20, 2)
+target_p2 = seed_of(12, 15)
+def j_both(case):
+    if case.seed == target_p1 or case.seed == target_p2:
+        return mod.Verdict("WA")
+    return mod.Verdict("OK")
+r1, t1 = run_case_shrink("both", 1, j_both)
+r4, t4 = run_case_shrink("both", 4, j_both)
+assert r1 == r4 and r1[0].cap == 12 and r1[2] == f"{target_p2}:12", (r1, r4)
+
+# 2. 1 回目で cap=20、2 回目は不発（1 回目の結果と作業ディレクトリを復元、道具の失敗も両方残る）
+tool1, tool2 = seed_of(4, 1), seed_of(6, 12)
+def j_p1_only(case):
+    if case.seed == target_p1:
+        return mod.Verdict("WA")
+    if case.seed in (tool1, tool2):
+        return mod.Verdict("GEN_FAIL")
+    return mod.Verdict("OK")
+r1, t1 = run_case_shrink("p1", 1, j_p1_only)
+r4, t4 = run_case_shrink("p1", 4, j_p1_only)
+assert r1 == r4 and r1[0].cap == 20 and r1[2] == f"{target_p1}:20", (r1, r4)
+assert t1 == t4 == [(f"{tool1}:4:g", "GEN_FAIL"), (f"{tool2}:6:g", "GEN_FAIL")], (t1, t4)
+
+# 3. 2 回目で Ctrl+C: 1 回目の仮の答えと作業ディレクトリを残す
+logs.clear()
+int_seed = seed_of(3, 14)
+def j_p2_interrupt(case):
+    if case.seed == target_p1:
+        return mod.Verdict("WA")
+    if case.seed == int_seed:
+        raise KeyboardInterrupt()
+    return mod.Verdict("OK")
+r1, _ = run_case_shrink("p2int", 1, j_p2_interrupt)
+assert r1[0].cap == 20 and r1[2] == f"{target_p1}:20", r1
+assert any("shrink interrupted" in ln for ln in logs), logs
+
+# 4. 1 回目が不発でも、2 回目で全 cap を探して cap=8 を見つける
+target_late = seed_of(8, 22)
+def j_p2_only(case):
+    return mod.Verdict("WA") if case.seed == target_late else mod.Verdict("OK")
+status_calls = 0
+r1, _ = run_case_shrink("p2", 1, j_p2_only)
+assert status_calls <= 10, f"Out.status was not throttled: {status_calls}"
+r4, _ = run_case_shrink("p2", 4, j_p2_only)
+assert r1 == r4 and r1[0].cap == 8 and r1[2] == f"{target_late}:8", (r1, r4)
 PY
 
 # Runner（-j）: 測り直しで止めて戻したケースを取りこぼさない。偽の evaluate で、走ったケースと見つかる失敗を確かめる

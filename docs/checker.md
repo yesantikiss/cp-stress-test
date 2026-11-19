@@ -69,13 +69,13 @@ main が RE や TLE になったときは checker を呼ばない。`--ref` の�
 | `read_double(lo, hi)` | 実数（`strtod` で読める形。`1e-9` も可） | 実数でない、`inf` や `nan`、`[lo, hi]` の外 |
 | `read_word(s)` | トークンをそのまま。`s` を渡すとそれと一致するか（大文字小文字は区別） | `s` と違う |
 | `read_token()` | トークンをそのまま | 残りがない |
-| `>>` | `int` `long long` `unsigned` 系 `double` `char` `std::string` | 読めない、型の範囲外。`char` は 1 文字のトークンだけ |
+| `>>` | `int` `long long` `unsigned` 系 `float` `double` `long double` `char` `std::string` | 読めない、型の範囲外。`char` は 1 文字のトークンだけ |
 | `expect_eof()` | 残りが空白だけか | 空白以外が残っている |
 | `seek_eof()` | 残りが空白だけなら `true` を返す | 失敗にはしない |
 | `fail(msg)` | 何も読まずに失敗にする | いつでも |
 | `is_open()` | 開いているか（`j.ref` 以外はいつも `true`） | 失敗にはしない |
 
-どの関数も、残りがないときは「unexpected end of file」で失敗する。`read_int` は `+5` や `007` も読める（値として 5、7）。`>>` は `bool` には使えない（コンパイルエラー）。
+どの関数も、残りがないときは「unexpected end of file」で失敗する。`read_int` は `+5` や `007` も読める（値として 5、7）。`read_u64` も先頭の `0` を許す。`>>` は `bool` には使えない（コンパイルエラー）。
 
 失敗したときにどうなるかは、どこから読んだかで決まる。
 

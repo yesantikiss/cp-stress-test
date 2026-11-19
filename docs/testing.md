@@ -61,7 +61,7 @@ FAIL tle (exit 0, want 1)
 | `one_indexed` | 0 始まりにすると、全関数で同じ seed の 1 始まりの番号からちょうど 1 引いたものになる。途中で切り替えるとそれ以降だけ変わる |
 | `graph_basic` / `graph_shapes` / `graph_mixed` | 本数、範囲、単純性、連結性、`.ordered`、形ごとの性質 |
 | `digraph_shapes` / `digraph_strong_shapes` / `digraph_mixed` | 上に加えて `.reach`（weak / root / strong を到達できる頂点数で確認） |
-| `graph_big` | 大きいグラフや密なグラフでも終わる |
+| `graph_big` | 大きいグラフや密なグラフでも終わる（hub で中心の辺が尽きる本数も含む） |
 | `dag` | 閉路なし、`.increasing`、`.reach` |
 | `bipartite` | `.label` 3 種の番号の範囲、2 彩色できる、`.ordered`、連結性 |
 | `weights` | `.w` を付けないと重みなし。Range なら範囲内、ラムダなら辺 1 本につき 1 回呼ぶ |
@@ -102,23 +102,24 @@ random の形は範囲などの共通の条件だけを見る。
 | `binary_search` | 数当てで、ちょうど ceil(log2 n) 回かかる |
 | `tie_by_seed` | 返事が同数なら seed で選び、同じ seed なら同じ |
 | `many_replies` / `fixed` / `state` | 返事の種類が多いとき、`Strategy::fixed`、`AdaptiveState` |
+| `to_text` | `std::string_view` を含む文字列化が 1 文字ずつに分解されないこと |
 
 ### st のテスト
 
 `tests/sample`、`tests/multi`、`tests/interactive`、`tests/shrink`、`tests/limits`、`tests/leftover` に、正しい解とわざと間違えた解（WA / RE / TLE、flush 忘れ、クエリ回数超過、余分な出力など）や、わざと壊した愚直解、gen、checker を置き、`st` の終了コード、判定の種類、保存されるファイルを確かめる。
 
 - 判定: OK / WA / RE / TLE / OLE / REF_RE / REF_TLE / REF_OLE、checker（`-c`、`--ref`）、interactor（`-i`、適応的な interactor）
-- 道具の側の失敗: gen error は GEN_FAIL、checker が例外で落ちたら CHECKER_FAIL で、どちらも終了コード 2
+- 道具の側の失敗: gen error は GEN_FAIL、checker が例外で落ちたら CHECKER_FAIL で、どちらも終了コード 2（`st repro` でも終了コード 2 で、`.stress/fail` に保存せず in.txt も変えない）
 - 比較方法: `--cmp exact`、`--cmp float:EPS`（誤差の内と外、`0`、不正な指定で終了コード 2）、token で小数がずれたら WA
-- インタラクティブ: interactor の WA の直後に main が落ちても、10 回とも WA になる
+- インタラクティブ: interactor の WA の直後に main が落ちても、10 回とも WA になる。`it.send(std::string_view(...))` が 1 つの文字列として送られる
 - 縮小: 縮小中に gen error が出ても本物の WA を残し、警告を出す。縮小中に Ctrl+C（SIGINT）を送ると、元の WA を保存して終了コード 1（縮小がすぐ終わらないよう、1 回ごとに待つ `main_slow.cpp` で確かめる）
 - 実行環境: 深さ 100 万の再帰が `st` でも `st bench` でも落ちない。出力し続ける main が `--output-limit` で止まって OLE（愚直解なら REF_OLE、`st bench` でも OLE）になり、保存された出力が上限以下。Ctrl+C で止めたあとに main が残らない
 - ビルド: リンクエラーの見分け（静的リンクのやり直し用）、作業ディレクトリの中身だけ消す `fresh_dir`、作業場所を `/dev/shm` に置いて `.stress/run` をリンクにすること（使えなければ `.stress/run`）、`--cxxflags` のクォート、`--cxxflags=-O0` の形、不正なクォートのエラー、空白や特殊文字を含む依存パス（`.d`）のキャッシュと更新検知、`pch_acl.hpp` 本体が無く `.gch` のフラグが合わないときの PCH なしやり直し、そのあと静的リンクなしでもやり直すとき `-include` が残らないこと（g++ は偽物）、日本語のリンクエラーも見分けること、最後に各テストのディレクトリで `st clean` を呼んで `/dev/shm` 側も消えること
-- 再現: `st repro` で同じ入力が出る。失敗時に表示された `st repro ...` に `--main` `--cmp` `--tl` `--cxxflags=...` が付き、そのまま打てば再現する
+- 再現: `st repro` で同じ入力が出る。失敗時に表示された `st repro ...` に `--main` `--cmp` `--tl` `--cxxflags=...` `--no-leftover` が付き、そのまま打てば再現する
 - in.txt: 失敗時の書き出し、手書きの in.txt の退避、`--no-to-in`、`st restore`
-- ジェネレーター: `-g` での選択（重複のまとめ、空指定）、`--big-iters`（`0` と負値）、STRESS_BIG の回数と終了後に次のジェネレーターを飛ばさないこと、`st make`、`st bench`、タグの表示
+- ジェネレーター: `-g` での選択（重複のまとめ、空指定）、`--big-iters`（`0` と負値）、STRESS_BIG の回数と終了後に次のジェネレーターを飛ばさないこと、`st make`（作業ディレクトリ外への `-o` 絶対パスも含む）、`st bench`、タグの表示
 - 並列実行（`-j`）: 同じ seed なら `-j 1` と `-j 4` で、保存されるケースと `found after N cases` が同じ（WA、RE、縮小あり・なし、checker、インタラクティブ）。並列でも子プロセスの上限が付く（OLE、深い再帰）、Ctrl+C で main が残らない、縮小中の gen error と Ctrl+C、STRESS_BIG の順番、本物の TLE はそのまま TLE、ほかの main と同時に動くと遅くなる main では単独で測り直して `-j 1` に切り替え、`-j -1` は終了コード 2、`STRESS_JOBS` が既定になり `-j` が優先、不正な `STRESS_JOBS` は終了コード 2、`STRESS_JOBS` があっても `st repro` は動く。偽の evaluate で、測り直しのために止めて戻したケースを取りこぼさないこと（it が尽きたあと、後ろの失敗が決まったあとの両方）と、単独で WA になったときの警告の文言
-- 入力の読み残し（`tests/leftover`）: `-include stress/leftover.hpp` で、`cin`、`sync_with_stdio(false)` の `cin`、`scanf`、`sync_with_stdio(false)` のまま `scanf` で読んで `exit` で終わるもの、の 4 通りを、読み残しあり（T を n と読み違える、行の途中まで、64 KB を超える入力の最後の行）、なし（末尾の空白と空行だけ、大きい入力）、パイプで渡したとき（何も出ない）で確かめ、行番号と残りの行数と先頭のトークンが合うこと。PCH の後ろに差し込んでも PCH が使われること。`st` では、件数と例の表示（main と愚直解、`-j 3` でも直列と同じ例）、正しく読む解では出ないこと、`--no-leftover`、checker モード（main だけ）、`st repro`、WA のときも出ること、`st bench`、`-i` では出ないこと
+- 入力の読み残し（`tests/leftover`）: `-include stress/leftover.hpp` で、`cin`、`sync_with_stdio(false)` の `cin`、`scanf`、`sync_with_stdio(false)` のまま `scanf` で読んで `exit` で終わるもの、の 4 通りを、読み残しあり（T を n と読み違える、行の途中まで、64 KB を超える入力の最後の行、長い 1 トークンとちょうど 5 トークン）、なし（末尾の空白と空行だけ、大きい入力）、パイプで渡したとき（何も出ない）で確かめ、行番号と残りの行数と先頭のトークンが合うこと。PCH の後ろに差し込んでも PCH が使われること。グローバルな `int stat[10];` を持つ `main.cpp` が `st` でビルドして動くこと。`st` では、件数と例の表示（main と愚直解、`-j 3` でも直列と同じ例）、正しく読む解では出ないこと、`--no-leftover`、checker モード（main だけ）、`st repro`、WA のときも出ること、`st bench`、`-i` では出ないこと
 - `examples/adaptive/` と `examples/checker/` の例がそのまま OK で通る
 
 ## テストしていないもの

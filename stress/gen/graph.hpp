@@ -402,7 +402,8 @@ class GraphOps {
         raw.reserve(m);
         ll root = -1;
         if (opt.connected) raw = base_edges(n, m, opt.strong ? RawEdges{} : raw_tree(n, TreeShape::mixed, (std::string(opt.name) + ".base").c_str()), opt, root);
-        grow(raw, m, opt, [&] { return std::pair{self().uniform(0, n - 1), self().uniform(0, n - 1)}; },
+        const __int128 max_cand = static_cast<__int128>(n) * (n - 1) / (opt.directed ? 1 : 2);
+        grow(raw, m, max_cand, opt, [&] { return std::pair{self().uniform(0, n - 1), self().uniform(0, n - 1)}; },
              [&](auto&& emit) {
                  for (ll u = 0; u < n; ++u)
                      for (ll v = 0; v < n; ++v) emit(u, v);
@@ -419,8 +420,8 @@ class GraphOps {
         if (!pieces_fits(n, m, opt))
             gen_error(name + ": m=" + std::to_string(m) + " is too many for shape pieces with n=" + std::to_string(n));
         auto capacity = [&](const std::vector<ll>& sizes) {
-            ll c = 0;
-            for (ll s : sizes) c += s * (s - 1) / 2 * (opt.directed ? 2 : 1);
+            __int128 c = 0;
+            for (ll s : sizes) c += static_cast<__int128>(s) * (s - 1) / 2 * (opt.directed ? 2 : 1);
             return c;
         };
         std::vector<ll> sizes;
@@ -436,7 +437,7 @@ class GraphOps {
         }
         RawEdges raw;
         raw.reserve(m);
-        grow(raw, m, opt,
+        grow(raw, m, capacity(sizes), opt,
              [&] {
                  const ll u = self().uniform(0, n - 1);
                  return std::pair{u, self().uniform(lo[u], hi[u])};
@@ -461,9 +462,20 @@ class GraphOps {
             if (opt.directed && self().coin()) std::swap(e.first, e.second);
             return e;
         };
-        grow(raw, m, opt,
+        // 中心（0 .. h-1）につながる単純辺の残り本数。尽きたら一様な引き方に切り替える。
+        ll hub_rem = h * (2 * n - h - 1) / (opt.directed ? 1 : 2);
+        size_t checked = 0;
+        const __int128 max_cand = static_cast<__int128>(n) * (n - 1) / (opt.directed ? 1 : 2);
+        grow(raw, m, max_cand, opt,
              [&] {
-                 if (self().coin(0.8)) return orient({self().uniform(0, h - 1), self().uniform(0, n - 1)});
+                 if (opt.simple) {
+                     while (checked < raw.size()) {
+                         const auto [a, b] = raw[checked++];
+                         if (a < h || b < h) --hub_rem;
+                     }
+                 }
+                 if ((!opt.simple || hub_rem > 0) && self().coin(0.8))
+                     return orient({self().uniform(0, h - 1), self().uniform(0, n - 1)});
                  return std::pair{self().uniform(0, n - 1), self().uniform(0, n - 1)};
              },
              [&](auto&& emit) {
@@ -477,7 +489,9 @@ class GraphOps {
     // connected ならパスが土台。w は 1 から 3 で、m 本入らないときだけ広げる。
     // strong なら 0 → 2 → 4 → … → 5 → 3 → 1 → 0 の閉路（隣り合う番号の差は 2 以下）が土台で、w は 2 以上。
     Edges path_graph(ll n, ll m, const Spec& opt) {
-        auto capacity = [&](ll w) { return (w * n - w * (w + 1) / 2) * (opt.directed ? 2 : 1); };
+        auto capacity = [&](ll w) {
+            return (static_cast<__int128>(w) * n - static_cast<__int128>(w) * (w + 1) / 2) * (opt.directed ? 2 : 1);
+        };
         ll w = std::min<ll>(self().uniform(opt.strong ? 2 : 1, 3), std::max<ll>(n - 1, 1));
         if (opt.simple)
             while (w < n - 1 && capacity(w) < m) ++w;
@@ -490,7 +504,7 @@ class GraphOps {
             if (opt.directed && self().coin()) std::swap(e.first, e.second);
             return e;
         };
-        grow(raw, m, opt,
+        grow(raw, m, capacity(w), opt,
              [&] {
                  if (n == 1) return std::pair<ll, ll>{0, 0};
                  const ll u = self().uniform(0, n - 2);
@@ -590,9 +604,9 @@ class GraphOps {
     }
 
     // graph 用: raw に draw() の辺を足して m 本にする。simple なら自己ループと多重辺を除く。
-    // 続けて 64 回外れたら密とみなし、each(emit) で列挙した候補の残りから選ぶ。
+    // 密なとき（m が全候補数 max_cand の半分以上）で続けて 64 回外れたら、each(emit) で列挙した候補の残りから選ぶ。
     template <class Draw, class Each>
-    void grow(RawEdges& raw, ll m, const Spec& opt, Draw draw, Each each) {
+    void grow(RawEdges& raw, ll m, __int128 max_cand, const Spec& opt, Draw draw, Each each) {
         if (!opt.simple) {
             while (static_cast<ll>(raw.size()) < m) raw.push_back(draw());
             return;
@@ -610,7 +624,7 @@ class GraphOps {
                 miss = 0;
                 continue;
             }
-            if (++miss < 64) continue;
+            if (static_cast<__int128>(m) * 2 < max_cand || ++miss < 64) continue;
             RawEdges cand;
             each([&](ll a, ll b) {
                 if (a != b && used.insert(key(a, b)).second) cand.push_back({a, b});

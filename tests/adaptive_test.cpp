@@ -117,6 +117,14 @@ static void test_state() {  // 状態と点数の版: [lo, hi] を状態にし�
     CHECK(q == 7);
 }
 
+static void test_to_text() {  // string_view も 1 文字ずつに分解せず文字列として出す
+    CHECK(adaptive_detail::to_text(std::string_view("Yes")) == "Yes");
+    CHECK(adaptive_detail::to_text(std::string("No")) == "No");
+    CHECK(adaptive_detail::to_text("abc") == "abc");
+    CHECK(adaptive_detail::to_text(std::vector<std::string_view>{"Yes", "No"}) == "[Yes, No]");
+    CHECK(adaptive_detail::to_text(std::pair<std::string_view, int>{"ok", 3}) == "(ok, 3)");
+}
+
 int main(int argc, char** argv) {
     return testing::run_tests(argc, argv,
                               {
@@ -127,5 +135,6 @@ int main(int argc, char** argv) {
                                   {"many_replies", test_many_replies},
                                   {"fixed", test_fixed},
                                   {"state", test_state},
+                                  {"to_text", test_to_text},
                               });
 }

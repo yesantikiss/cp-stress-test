@@ -907,6 +907,17 @@ static void test_graph_big() {
     CHECK((ll)big.digraph(200000, 400000, {.reach = Reach::strong}).size() == 400000);
     CHECK((ll)big.digraph(200000, 400000, {.shape = DigraphShape::path, .reach = Reach::root}).size() == 400000);
     CHECK((ll)big.digraph(300, 300 * 299, {.reach = Reach::strong}).size() == 300 * 299);
+    // hub で中心の辺が尽きる本数でも時間内に終わり、単純グラフで m 本ある（以前は seed 9 で止まった）
+    for (std::uint64_t seed = 1; seed <= 12; ++seed) {
+        Gen g(seed);
+        auto es = g.graph(20000, 200000, {.shape = GraphShape::hub, .connected = seed % 2 == 0});
+        check_edges(20000, 200000, es, false, true, seed % 2 == 0);
+    }
+    for (std::uint64_t seed = 1; seed <= 4; ++seed) {
+        Gen g(seed);
+        auto es = g.digraph(20000, 200000, {.shape = DigraphShape::hub, .reach = Reach::strong});
+        check_edges(20000, 200000, es, true, true, true);
+    }
 }
 
 static void test_dag() {

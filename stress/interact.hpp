@@ -34,6 +34,7 @@
 
 #include <csignal>
 #include <sstream>
+#include <string_view>
 #include <vector>
 
 #include "reader.hpp"
@@ -97,13 +98,15 @@ class Interactor {
 
     template <class T>
     static void put(std::ostringstream& os, const T& x, bool& first) {
-        if constexpr (std::is_convertible_v<const T&, std::string> || std::is_arithmetic_v<T>) {
+        if constexpr (std::is_convertible_v<const T&, std::string_view> || std::is_arithmetic_v<T>) {
             if (!first) os << ' ';
             first = false;
             if constexpr (std::is_same_v<T, char>)
                 os << x;
             else if constexpr (std::is_arithmetic_v<T> && sizeof(T) == 1)
                 os << static_cast<int>(x);  // int8_t などを文字として出さない
+            else if constexpr (std::is_convertible_v<const T&, std::string_view>)
+                os << std::string_view(x);
             else
                 os << x;
         } else {

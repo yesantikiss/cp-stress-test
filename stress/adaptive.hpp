@@ -20,6 +20,7 @@
 #include <map>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -65,8 +66,8 @@ void write(std::ostringstream& os, const T& x) {
         os << static_cast<int>(x);
     } else if constexpr (std::is_arithmetic_v<T>) {
         os << x;
-    } else if constexpr (std::is_convertible_v<const T&, std::string>) {
-        os << std::string(x);
+    } else if constexpr (std::is_convertible_v<const T&, std::string_view>) {
+        os << std::string_view(x);
     } else if constexpr (is_pair<T>::value) {
         os << '(';
         write(os, x.first);

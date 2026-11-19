@@ -105,7 +105,7 @@ random の形は範囲などの共通の条件だけを見る。
 
 ### st のテスト
 
-`tests/sample`、`tests/multi`、`tests/interactive`、`tests/shrink`、`tests/limits` に、正しい解とわざと間違えた解（WA / RE / TLE、flush 忘れ、クエリ回数超過、余分な出力など）や、わざと壊した愚直解、gen、checker を置き、`st` の終了コード、判定の種類、保存されるファイルを確かめる。
+`tests/sample`、`tests/multi`、`tests/interactive`、`tests/shrink`、`tests/limits`、`tests/leftover` に、正しい解とわざと間違えた解（WA / RE / TLE、flush 忘れ、クエリ回数超過、余分な出力など）や、わざと壊した愚直解、gen、checker を置き、`st` の終了コード、判定の種類、保存されるファイルを確かめる。
 
 - 判定: OK / WA / RE / TLE / OLE / REF_RE / REF_TLE / REF_OLE、checker（`-c`、`--ref`）、interactor（`-i`、適応的な interactor）
 - 道具の側の失敗: gen error は GEN_FAIL、checker が例外で落ちたら CHECKER_FAIL で、どちらも終了コード 2
@@ -118,6 +118,7 @@ random の形は範囲などの共通の条件だけを見る。
 - in.txt: 失敗時の書き出し、手書きの in.txt の退避、`--no-to-in`、`st restore`
 - ジェネレーター: `-g` での選択（重複のまとめ、空指定）、`--big-iters`（`0` と負値）、STRESS_BIG の回数と終了後に次のジェネレーターを飛ばさないこと、`st make`、`st bench`、タグの表示
 - 並列実行（`-j`）: 同じ seed なら `-j 1` と `-j 4` で、保存されるケースと `found after N cases` が同じ（WA、RE、縮小あり・なし、checker、インタラクティブ）。並列でも子プロセスの上限が付く（OLE、深い再帰）、Ctrl+C で main が残らない、縮小中の gen error と Ctrl+C、STRESS_BIG の順番、本物の TLE はそのまま TLE、ほかの main と同時に動くと遅くなる main では単独で測り直して `-j 1` に切り替え、`-j -1` は終了コード 2、`STRESS_JOBS` が既定になり `-j` が優先、不正な `STRESS_JOBS` は終了コード 2、`STRESS_JOBS` があっても `st repro` は動く。偽の evaluate で、測り直しのために止めて戻したケースを取りこぼさないこと（it が尽きたあと、後ろの失敗が決まったあとの両方）と、単独で WA になったときの警告の文言
+- 入力の読み残し（`tests/leftover`）: `-include stress/leftover.hpp` で、`cin`、`sync_with_stdio(false)` の `cin`、`scanf`、`sync_with_stdio(false)` のまま `scanf` で読んで `exit` で終わるもの、の 4 通りを、読み残しあり（T を n と読み違える、行の途中まで、64 KB を超える入力の最後の行）、なし（末尾の空白と空行だけ、大きい入力）、パイプで渡したとき（何も出ない）で確かめ、行番号と残りの行数と先頭のトークンが合うこと。PCH の後ろに差し込んでも PCH が使われること。`st` では、件数と例の表示（main と愚直解、`-j 3` でも直列と同じ例）、正しく読む解では出ないこと、`--no-leftover`、checker モード（main だけ）、`st repro`、WA のときも出ること、`st bench`、`-i` では出ないこと
 - `examples/adaptive/` と `examples/checker/` の例がそのまま OK で通る
 
 ## テストしていないもの

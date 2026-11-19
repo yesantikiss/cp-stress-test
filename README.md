@@ -71,7 +71,7 @@ found after 1 cases (0.0s)
 
 ## ドキュメント
 
-- [使い方](docs/usage.md): `st` のコマンドとオプション、失敗の保存、ビルドの設定
+- [使い方](docs/usage.md): `st` のコマンドとオプション、失敗の保存、入力の読み残しの警告、ビルドの設定
 - [gen.cpp の書き方](docs/gen.md): ジェネレーターと `stress/gen.hpp` の関数
 - [checker.cpp の書き方](docs/checker.md): スペシャルジャッジと `stress/judge.hpp`
 - [インタラクティブ問題](docs/interactive.md): interactor.cpp と `st -i`

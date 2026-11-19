@@ -82,6 +82,7 @@ copied failing input -> in.txt
 | `--checker-tl SEC` | checker と interactor の制限時間（既定 10 秒） |
 | `--output-limit MB` | main と愚直解が書ける出力の上限（既定 64 MB。[実行環境](#実行環境)） |
 | `--no-to-in` | 失敗した入力を in.txt にコピーしない（[in.txt への書き出し](#intxt-への書き出し)） |
+| `--no-leftover` | 入力の読み残しを調べない（[入力の読み残し](#入力の読み残し)）。`st bench` でも使える |
 | `--gen-tl SEC` | gen の制限時間（既定 10 秒） |
 | `--gen-file SRC` | ジェネレーターのソース（既定 gen.cpp） |
 | `--san` `--cxxflags FLAGS` | [ビルド](#ビルド)の設定 |
@@ -286,6 +287,44 @@ st bench [NAME ...] [-n N] [--seed S] [--cap C] [--tl SEC] [--main SRC]
 - st が書き出したものを上書きするときは退避しないので、失敗が続いても `.bak` には手書きの in.txt が残る。
 - 退避は 1 つだけ。手書きの in.txt を書き換えて、また失敗すると `.bak` はその新しい方になる。
 
+## 入力の読み残し
+
+main と愚直解が入力を最後まで読まずに終わったら、警告を出す。複数テストケースの問題の gen.cpp や in.txt を使い回して、先頭の T を n と読み違えたまま OK になる、といった取り違えに気づくためのもの。判定は変えない（OK は OK のまま、止まりもしない）。
+
+```text
+OK  1000 cases  max 3ms  2.1s  base_seed=...
+warning: main が 1000 ケース中 1000 ケースで入力を読み残しています
+  例: case=1234567:1:gen  3 行目から（残り 1 行）: 5 3 2
+warning: guchoku が 1000 ケース中 1000 ケースで入力を読み残しています
+  例: case=1234567:1:gen  3 行目から（残り 1 行）: 5 3 2
+```
+
+- `st run` は件数と、一番手前のケースを例として 1 つ出す（`-j` でも同じ例になる）。失敗が見つかったときも、それまでの件数を出す。
+- `st repro` と `st bench` はケースごとに出す。
+- 「答えが決まったら残りを読まずに return」する正しいコードでも出る。一部のケースだけなら、たいていそれ。全部のケースで出ていたら、読み方そのものを疑う。
+- 調べるのは main と愚直解だけ。gen、checker、interactor は調べない。`-i` では main の stdin がパイプなので、何もしない。
+- `--no-leftover` で切れる。
+
+### しくみ
+
+st は main と愚直解のビルドに `-include stress/leftover.hpp` を足す（PCH の `-include` より後ろ）。main.cpp を書き換える必要はなく、提出するコードにも入らない。
+
+- `stress/leftover.hpp` はグローバル変数を 1 つ置き、プログラムが終わるとき（main の return か `exit`）に調べる。`quick_exit` や `_Exit`、落ちたときは調べない。
+- 調べるのは stdin が通常のファイルのとき（`./a.out < in.txt`）だけ。パイプや端末では何もしない。
+- ストリームからは何も読まない。ファイルの読み取り位置から cin と stdio のバッファに残っている分を引いて「どこまで読んだか」を求め、ファイルをそこから読み直して空白以外があるかを見る。`cin`（`sync_with_stdio(false)` でも）、`scanf`、`getchar` で読むコードで使える。
+- `read(0, ...)` で自前のバッファに読む高速入力では、バッファに残った分が見えないので見逃すことがある。`mmap` で読むコードでは読み残しと誤って出る。
+- 見つけると stderr に `[leftover] 入力を読み残しています: 3 行目から（残り 1 行）: 5 3 2` と出す。st が付ける `-DSTRESS_LEFTOVER_NAME=main` があれば、ケースのディレクトリに `leftover_main.txt` も書き、st はそれを数える。
+
+### 手元で実行するときも調べる
+
+自分のビルドスクリプトに `-include` を 1 行足せば、`./a.out < in.txt` で実行したときも stderr に警告が出る（出力や終了コードはそのまま）。PCH を使っているなら、PCH の `-include` より後ろに置く（前にあると PCH が使われなくなる）。
+
+```bash
+CXX_FLAGS+=(-include "$PCH_HDR")                                  # PCH（あれば）
+CXX_FLAGS+=(-include "$HOME/cp-stress-test/stress/leftover.hpp")  # その後ろに足す
+g++ "${CXX_FLAGS[@]}" "$SOURCE_FILE"
+```
+
 ## st clean
 
 `.stress/` の fail、run、last、bench、make と、`/dev/shm` に置いた作業場所を消す。
@@ -327,6 +366,7 @@ main、愚直解、gen、checker、interactor を並列にビルドする。フ�
 - include パスには stress-test のディレクトリ（`stress/gen.hpp` などを読むため）、ACL、`$CP_LIBRARY_DIR`（既定 `~/cp-library`）を入れる。ACL は環境変数 `ACL_DIR`、なければ問題のディレクトリの `ac-library/` を使う（`atcoder/` を含むディレクトリを指す）。
 - 問題のディレクトリに `pch_acl.hpp.gch` があり、ソースが `#include <atcoder/...>` を含むときは、`-include pch_acl.hpp` を付けてプリコンパイル済みヘッダを使う。main と愚直解だけで、`--san` のときは使わない。`pch_acl.hpp` 本体が無くフラグ不一致で `.gch` を使えなかったときは、PCH なしで自動でやり直す。
 - `-static`（静的リンク）は、起動のたびの動的リンクを省いて 1 回 0.5 ms ほど速く起動するため。数 ms で終わるケースを何千回も回すときに効く。libstdc++ や libc の静的ライブラリが無くてリンクに失敗したときは、`-static` なしで自動でやり直す。
+- main と愚直解には `-include stress/leftover.hpp -DSTRESS_LEFTOVER_NAME=main`（愚直解は `=ref`）を足す（[入力の読み残し](#入力の読み残し)）。`--no-leftover` のときは足さない。
 - バイナリは `.stress/bin/<種類>-<ハッシュ>` に置く。ハッシュはソースのパスとフラグから作るので、`--san` の有無などで別のバイナリになる。
 - ソースか、それが include しているファイルが変わったときだけ再ビルドする。
 

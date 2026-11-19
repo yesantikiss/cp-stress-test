@@ -140,6 +140,38 @@ static bool tree_has_shape(const std::vector<std::vector<ll>>& adj, std::string_
     return shape == "random";
 }
 
+// .rooted = true で作った木（根は頂点 0）が、形 shape の根としての性質を満たすか。
+static bool tree_root_ok(const std::vector<std::vector<ll>>& adj, std::string_view shape) {
+    if (!tree_has_shape(adj, shape)) return false;
+    const ll n = adj.size();
+    if (n <= 1) return true;
+    auto dist = bfs(adj, 0);
+    const ll max_depth = *std::max_element(dist.begin(), dist.end());
+    if (shape == "path") return adj[0].size() == 1 && max_depth == n - 1;
+    if (shape == "star") return static_cast<ll>(adj[0].size()) == n - 1 && max_depth == 1;
+    if (shape == "caterpillar") {
+        ll inner = 0;
+        for (ll w : adj[0]) inner += adj[w].size() >= 2;
+        if (inner > 1) return false;
+        if (adj[0].size() == 1) {
+            ll u = adj[0][0], u_inner = 0;
+            for (ll w : adj[u]) u_inner += adj[w].size() >= 2;
+            if (u_inner > 1) return false;
+        }
+        return true;
+    }
+    if (shape == "binary") {
+        if (adj[0].size() > 2 || max_depth != floor_log2(n)) return false;
+        std::vector<ll> cnt(max_depth + 1);
+        for (ll d : dist) ++cnt[d];
+        for (ll d = 0; d < max_depth; ++d)
+            if (cnt[d] != (1LL << d)) return false;
+        return true;
+    }
+    if (shape == "deep") return adj[0].size() <= 3 && max_depth >= (n - 1 + 2) / 3;
+    return shape == "random";
+}
+
 // 頂点を 3 つまで選んで、それに触れる辺の数の最大（n は小さい前提）。
 static ll best_hub_cover(ll n, const Edges& es) {
     std::vector<ll> deg(n);
@@ -594,6 +626,75 @@ static void test_tree_options() {
     }
 }
 
+static void test_tree_rooted() {
+    Gen g(71);
+    for (auto [shape, name] : kTreeShapes) {
+        for (ll n = 1; n <= 40; ++n) {
+            auto es = g.tree(n, {.shape = shape, .rooted = true});
+            CHECK_OR(is_tree(n, es, 1), continue);
+            CHECK(tree_root_ok(neighbors(n, es, 1), name));
+        }
+        for (int k = 0; k < 3; ++k) {
+            auto es = g.tree(1000, {.shape = shape, .rooted = true});
+            CHECK_OR(is_tree(1000, es, 1), continue);
+            CHECK(tree_root_ok(neighbors(1000, es, 1), name));
+        }
+    }
+    // mixed でも選ばれた形の根が頂点 1 になり、全 6 種が出る
+    std::set<std::string> seen_shapes;
+    for (std::uint64_t seed = 0; seed < 300; ++seed) {
+        Gen t(seed);
+        const ll n = t.i(1, 60);
+        auto es = t.tree(n, {.rooted = true});
+        auto s = shape_tag(t, "tree");
+        CHECK_OR(is_tree(n, es, 1), continue);
+        CHECK(tree_root_ok(neighbors(n, es, 1), s));
+        seen_shapes.insert(s);
+    }
+    CHECK(seen_shapes.size() == 6);
+    // 根以外の頂点番号と辺の向きはシャッフルされる（.ordered なら常に u < v）
+    std::set<ll> path_next;
+    bool saw_root_left = false, saw_root_right = false;
+    for (int k = 0; k < 50; ++k) {
+        auto ep = g.tree(20, {.shape = TreeShape::path, .rooted = true});
+        CHECK(is_tree(20, ep, 1));
+        auto adj = neighbors(20, ep, 1);
+        CHECK(adj[0].size() == 1);
+        path_next.insert(adj[0][0] + 1);
+        auto es = g.tree(20, {.shape = TreeShape::star, .rooted = true});
+        for (auto& e : es) {
+            if (e.u == 1) saw_root_left = true;
+            if (e.v == 1) saw_root_right = true;
+        }
+    }
+    CHECK(path_next.size() >= 5);
+    CHECK(saw_root_left && saw_root_right);
+    // .ordered / .w との併用
+    for (int k = 0; k < 30; ++k) {
+        ll n = g.i(2, 20);
+        auto es = g.tree(n, {.shape = TreeShape::star, .rooted = true, .ordered = true, .w = Range{5, 9}});
+        CHECK(is_tree(n, es, 1) && es.weighted);
+        for (auto& e : es) CHECK(e.u == 1 && e.u < e.v && 5 <= e.w && e.w <= 9);
+    }
+    // one_indexed = false なら頂点 0 が根
+    Gen z(72);
+    z.one_indexed = false;
+    for (auto [shape, name] : kTreeShapes) {
+        for (ll n = 1; n <= 20; ++n) {
+            auto es = z.tree(n, {.shape = shape, .rooted = true});
+            CHECK_OR(is_tree(n, es, 0), continue);
+            CHECK(tree_root_ok(neighbors(n, es, 0), name));
+        }
+    }
+    // 既定（.rooted = false）では頂点 1 が根に固定されない
+    int root_not_1 = 0;
+    for (int k = 0; k < 30; ++k) {
+        auto es = g.tree(50, {.shape = TreeShape::star});
+        if (neighbors(50, es, 1)[0].size() != 49) ++root_not_1;
+    }
+    CHECK(root_not_1 > 0);
+}
+
 // one_indexed = false なら、同じ seed で 1 始まりのときの番号からちょうど 1 引いたものになる
 static void test_one_indexed() {
     auto shifted = [](const Edges& a, const Edges& b) {
@@ -622,6 +723,8 @@ static void test_one_indexed() {
         const std::uint64_t s = 1000 + k;
         auto [t1, t0] = both(s, [&](Gen& g) { return g.tree(n, {.w = Range{1, 9}}); });
         CHECK(shifted(t1, t0) && is_tree(n, t0, 0));
+        auto [r1, r0] = both(s, [&](Gen& g) { return g.tree(n, {.rooted = true}); });
+        CHECK(shifted(r1, r0) && is_tree(n, r0, 0));
         auto [o1, o0] = both(s, [&](Gen& g) { return g.tree(n, {.ordered = true}); });
         CHECK(shifted(o1, o0));
         auto [p1, p0] = both(s, [&](Gen& g) { return g.parents(n); });
@@ -1403,6 +1506,7 @@ int main(int argc, char** argv) {
                                   {"tree_shapes", test_tree_shapes},
                                   {"tree_mixed", test_tree_mixed},
                                   {"tree_options", test_tree_options},
+                                  {"tree_rooted", test_tree_rooted},
                                   {"parents", test_parents},
                                   {"parents_mixed", test_parents_mixed},
                                   {"one_indexed", test_one_indexed},

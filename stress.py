@@ -13,7 +13,7 @@
   st -g max -g all_same  # STRESS_GEN の生成器を絞る
   st repro 12345:7:gen    # 失敗ケースを 1 つ再現（seed:cap:生成器）
   st make max -n 5 -o cases/   # 入力ファイルだけ書き出す
-  st bench max            # 最大ケースで main の実行時間を測る
+  st bench max            # 最大ケースで main の実行時間と最大メモリを測る
   st last [--to-in]       # 直前の失敗を表示（in.txt へコピー）
   st restore              # 退避した手書きの in.txt を戻す
   st init [-c] [-i]       # gen.cpp などの雛形を置く
@@ -362,11 +362,28 @@ def _untrack(p: subprocess.Popen) -> None:
         t.remove(p)
 
 
-def wait_exit(proc: subprocess.Popen, timeout: float) -> bool:
-    """proc が終わるまで最大 timeout 秒待つ。終わったら True（回収はしないので、続けて proc.wait() を呼ぶ）。
+def _maxrss_kb(ru) -> int:
+    # Linux の ru_maxrss は KB、macOS はバイト
+    return ru.ru_maxrss // 1024 if sys.platform == "darwin" else ru.ru_maxrss
+
+
+def _reap(proc: subprocess.Popen) -> tuple[int, int | None]:
+    """proc を回収し、(終了コード, 最大 RSS [KB] or None) を返す。"""
+    if proc.returncode is not None:
+        return proc.returncode, None
+    if hasattr(os, "wait4"):
+        _, status, ru = os.wait4(proc.pid, 0)
+        code = os.waitstatus_to_exitcode(status)
+        proc.returncode = code
+        return code, _maxrss_kb(ru)
+    return proc.wait(), None
+
+
+def wait_exit(proc: subprocess.Popen, timeout: float) -> tuple[bool, int | None, int | None]:
+    """proc が終わるまで最大 timeout 秒待つ。終わったら回収して (True, code, maxrss_kb)、時間切れなら (False, None, None)。
 
     Popen.wait(timeout=...) は最大 50 ms 間隔で終わったかを見に行くので、そのぶん遅く、時間も長く測ってしまう。
-    Linux では pidfd で終わった瞬間に起きる。使えないときだけ Popen.wait に任せる。
+    Linux では pidfd で終わった瞬間に起きてから os.wait4 で回収し、最大 RSS も同時に取る。
     """
     if hasattr(os, "pidfd_open"):
         try:
@@ -378,12 +395,28 @@ def wait_exit(proc: subprocess.Popen, timeout: float) -> bool:
                 ready, _, _ = select.select([fd], [], [], max(0.0, timeout))
             finally:
                 os.close(fd)
-            return bool(ready)
+            if not ready:
+                return False, None, None
+            code, rss = _reap(proc)
+            return True, code, rss
+    if hasattr(os, "wait4"):
+        deadline = time.monotonic() + max(0.0, timeout)
+        delay = 0.0005
+        while True:
+            pid, status, ru = os.wait4(proc.pid, os.WNOHANG)
+            if pid != 0:
+                code = os.waitstatus_to_exitcode(status)
+                proc.returncode = code
+                return True, code, _maxrss_kb(ru)
+            rem = deadline - time.monotonic()
+            if rem <= 0:
+                return False, None, None
+            time.sleep(min(delay, rem))
+            delay = min(delay * 2, 0.02)
     try:
-        proc.wait(timeout=timeout)
-        return True
+        return True, proc.wait(timeout=timeout), None
     except subprocess.TimeoutExpired:
-        return False
+        return False, None, None
 
 
 @dataclass
@@ -391,6 +424,7 @@ class RunResult:
     status: str  # OK / RE / TLE / OLE（出力が output_mb を超えた）
     code: int
     elapsed: float
+    maxrss_kb: int | None = None
 
 
 def run(exe: Path | list[str], stdin: Path | None, stdout: Path, stderr: Path, tl: float,
@@ -409,22 +443,23 @@ def run(exe: Path | list[str], stdin: Path | None, stdout: Path, stderr: Path, t
                 proc = subprocess.Popen(cmd, stdin=fi, stdout=fo, stderr=fe, cwd=cwd, start_new_session=True,
                                         env={**os.environ, **env} if env else None)
             _track(proc)
-            if not wait_exit(proc, tl):
+            finished, code, maxrss_kb = wait_exit(proc, tl)
+            if not finished:
                 _kill(proc)
-                proc.wait()
+                _, maxrss_kb = _reap(proc)
                 check_cancel()
-                return RunResult("TLE", -9, time.perf_counter() - start)
-            code = proc.wait()
+                return RunResult("TLE", -9, time.perf_counter() - start, maxrss_kb)
             elapsed = time.perf_counter() - start
         finally:
             if proc is not None:
                 if proc.returncode is None:
                     _kill(proc)
-                    proc.wait()
+                    _reap(proc)
                 _untrack(proc)
     check_cancel()  # 止められて終わった結果は使わない
+    assert code is not None
     status = "OK" if code == 0 else "OLE" if code == -signal.SIGXFSZ and output_mb is not None else "RE"
-    return RunResult(status, code, elapsed)
+    return RunResult(status, code, elapsed, maxrss_kb)
 
 
 def describe_code(code: int) -> str:
@@ -458,13 +493,26 @@ def parse_cmp_mode(mode: str) -> tuple[str, float | None]:
     die(f"unknown --cmp mode: {mode!r} (expected token, exact, float, or float:EPS)")
 
 
-def compare(a: bytes, b: bytes, mode: str) -> tuple[bool, str]:
+def _token_line(data: bytes, idx: int) -> int:
+    """data.split()[idx] がある 1 始まりの行番号を返す。idx が末尾を超えるときは最後の行の次（空なら 1）。"""
+    lines = data.splitlines()
+    seen = 0
+    for lineno, ln in enumerate(lines, 1):
+        cnt = len(ln.split())
+        if seen + cnt > idx:
+            return lineno
+        seen += cnt
+    return len(lines) + 1 if lines else 1
+
+
+def compare(a: bytes, b: bytes, mode: str) -> tuple[bool, str, tuple[int, int] | None]:
     kind, eps = parse_cmp_mode(mode)
     if kind == "exact":
         if a == b:
-            return True, ""
+            return True, "", None
         n = next((k for k in range(min(len(a), len(b))) if a[k] != b[k]), min(len(a), len(b)))
-        return False, f"first difference at byte {n}"
+        line = a[:n].count(b"\n") + 1
+        return False, f"first difference at byte {n}", (line, line)
     ta, tb = a.split(), b.split()
     for k, (x, y) in enumerate(zip(ta, tb)):
         if x == y:
@@ -476,10 +524,12 @@ def compare(a: bytes, b: bytes, mode: str) -> tuple[bool, str]:
                     continue
             except ValueError:
                 pass
-        return False, f"token {k + 1}: main={x.decode(errors='replace')!r} ref={y.decode(errors='replace')!r}"
+        return (False, f"token {k + 1}: main={x.decode(errors='replace')!r} ref={y.decode(errors='replace')!r}",
+                (_token_line(a, k), _token_line(b, k)))
     if len(ta) != len(tb):
-        return False, f"token count differs: main={len(ta)} ref={len(tb)}"
-    return True, ""
+        k = min(len(ta), len(tb))
+        return False, f"token count differs: main={len(ta)} ref={len(tb)}", (_token_line(a, k), _token_line(b, k))
+    return True, "", None
 
 
 # ---------------------------------------------------------------- 1 ケース
@@ -492,6 +542,9 @@ class Verdict:
     elapsed: float = 0.0
     queries: tuple[int, int] | None = None  # インタラクティブ: (使った回数, 制限 or -1)
     leftover: dict[str, str] = field(default_factory=dict)  # 入力を読み残したプログラム -> "3 行目から（残り 1 行）: 5 3 2"
+    diff_lines: tuple[int, int] | None = None  # compare の WA で最初に食い違った 1 始まりの行番号 (main, guchoku)
+    first_token: str | None = None             # 愚直解の出力の先頭トークン（分布集計用）
+    tags: list[str] = field(default_factory=list)  # gen が付けたタグ名（重複なし、分布集計用）
 
 
 @dataclass
@@ -553,6 +606,55 @@ def read_tags(d: Path) -> list[str]:
             continue
         tags.append(name if count == "1" else f"{name} x{count}")
     return tags
+
+
+def read_tag_names(d: Path) -> list[str]:
+    """gen が書いた tags.txt からタグ名だけを取り出す（1 ケースにつき重複なし）。"""
+    p = d / "tags.txt"
+    if not p.exists():
+        return []
+    names: list[str] = []
+    seen: set[str] = set()
+    for line in p.read_text(errors="replace").splitlines():
+        name, _, _ = line.rpartition("\t")
+        if name and name not in seen:
+            seen.add(name)
+            names.append(name)
+    return names
+
+
+FIRST_TOKEN_MAX = 40      # 分布表示で残す先頭トークンの最大文字数
+FIRST_TOKEN_SCAN = 65536  # 先頭の空白を読み飛ばす最大バイト数
+
+
+def read_first_token(path: Path) -> str | None:
+    """ファイルの先頭トークンを先頭の数 KB だけ読んで返す。空（空白のみ）なら "(empty)"、読めなければ None。"""
+    try:
+        with open(path, "rb") as f:
+            tok = bytearray()
+            eof = False
+            cap = FIRST_TOKEN_MAX * 4 + 4
+            for _ in range(FIRST_TOKEN_SCAN // 4096):
+                chunk = f.read(4096)
+                if not chunk:
+                    eof = True
+                    break
+                if not tok:
+                    chunk = chunk.lstrip()
+                    if not chunk:
+                        continue
+                elif chunk[0:1].isspace():
+                    break
+                parts = chunk.split(None, 1)
+                tok += parts[0][:cap - len(tok)]
+                if len(parts) > 1 or len(tok) >= cap or len(parts[0]) < len(chunk):
+                    break
+    except OSError:
+        return None
+    if not tok:
+        return "(empty)" if eof else None
+    text = bytes(tok).decode("utf-8", errors="replace")
+    return text[:FIRST_TOKEN_MAX - 3] + "..." if len(text) > FIRST_TOKEN_MAX else text
 
 
 SHM = Path("/dev/shm")
@@ -618,6 +720,8 @@ def fresh_dir(d: Path) -> Path:
 def run_case(progs: Programs, case: Case, d: Path, opt: argparse.Namespace) -> Verdict:
     v = _run_case(progs, case, d, opt)
     v.leftover = read_leftover(d)
+    if v.kind != "GEN_FAIL" and getattr(opt, "stats", True):
+        v.tags = read_tag_names(d)
     return v
 
 
@@ -660,6 +764,8 @@ def _run_case(progs: Programs, case: Case, d: Path, opt: argparse.Namespace) -> 
         if r.status == "RE":
             return Verdict("REF_RE", f"guchoku: {describe_code(r.code)}", m.elapsed)
 
+    first_tok = read_first_token(d / "out_ref.txt") if progs.ref and getattr(opt, "stats", True) else None
+
     if progs.checker:
         args = [str(inp), str(d / "out_main.txt")]
         if progs.ref:
@@ -667,17 +773,17 @@ def _run_case(progs: Programs, case: Case, d: Path, opt: argparse.Namespace) -> 
         c = run(progs.checker, None, d / "stdout_checker.txt", d / "stderr_checker.txt", opt.checker_tl, d, args)
         msg = (d / "stderr_checker.txt").read_text(errors="replace").strip()
         if c.status == "OK":
-            return Verdict("OK", "", m.elapsed)
+            return Verdict("OK", "", m.elapsed, first_token=first_tok)
         if c.status == "TLE" or c.code != 1:
             # 0 と 1 以外（3、ほかの値、例外やシグナルで落ちた、TL 超え）は checker 自身の失敗
             what = f"checker exceeded {opt.checker_tl}s" if c.status == "TLE" else describe_code(c.code)
-            return Verdict("CHECKER_FAIL", f"{what} {msg}".strip(), m.elapsed)
+            return Verdict("CHECKER_FAIL", f"{what} {msg}".strip(), m.elapsed, first_token=first_tok)
         if msg.startswith("WA: "):
             msg = msg[4:]
-        return Verdict("WA", msg or f"checker {describe_code(c.code)}", m.elapsed)
+        return Verdict("WA", msg or f"checker {describe_code(c.code)}", m.elapsed, first_token=first_tok)
 
-    ok, why = compare((d / "out_main.txt").read_bytes(), (d / "out_ref.txt").read_bytes(), opt.cmp)
-    return Verdict("OK" if ok else "WA", why, m.elapsed)
+    ok, why, diff_lines = compare((d / "out_main.txt").read_bytes(), (d / "out_ref.txt").read_bytes(), opt.cmp)
+    return Verdict("OK" if ok else "WA", why, m.elapsed, diff_lines=diff_lines, first_token=first_tok)
 
 
 # ---------------------------------------------------------------- インタラクティブ
@@ -967,6 +1073,8 @@ def save_failure(workdir: Path, run_dir: Path, case: Case, v: Verdict, opt: argp
         "sources": {k: {"path": str(p), "sha1": hashlib.sha1(p.read_bytes()).hexdigest()} for k, p in sources.items()},
         "time": dt.datetime.now().isoformat(timespec="seconds"),
     }
+    if v.diff_lines is not None:
+        meta["diff_lines"] = list(v.diff_lines)
     (dest / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False) + "\n")
     last = workdir / ".stress" / "last"
     if last.is_symlink() or last.exists():
@@ -1017,7 +1125,10 @@ def mode_name(opt: argparse.Namespace) -> str:
     return "checker" if opt.checker else "compare"
 
 
-def head(path: Path, lines: int = 20, width: int = 200) -> str:
+HEAD_LINES = 20
+
+
+def head(path: Path, lines: int = HEAD_LINES, width: int = 200) -> str:
     if not path.exists():
         return Out.dim("(none)")
     text = path.read_text(errors="replace").splitlines()
@@ -1027,7 +1138,27 @@ def head(path: Path, lines: int = 20, width: int = 200) -> str:
     return "\n".join(shown) if shown else Out.dim("(empty)")
 
 
-def head_tail(path: Path, lines: int = 20, width: int = 200) -> str:
+def around(path: Path, line: int, context: int = 3, width: int = 200) -> str:
+    """line 行目（1 始まり）の前後 context 行を行番号付きで返す。line 行目に '>' を付ける。"""
+    if not path.exists():
+        return Out.dim("(none)")
+    raw_lines = path.read_bytes().splitlines()
+    start = max(1, line - context)
+    end = min(len(raw_lines), line + context)
+    num_w = len(str(max(line, end)))
+    out: list[str] = []
+    for n in range(start, end + 1):
+        s = raw_lines[n - 1].decode("utf-8", errors="replace")
+        if len(s) > width:
+            s = s[:width] + Out.dim(" ...")
+        prefix = Out.red(f"> {n:>{num_w}}: ") if n == line else Out.dim(f"  {n:>{num_w}}: ")
+        out.append(prefix + s)
+    if line > len(raw_lines):
+        out.append(Out.red(f"> {line:>{num_w}}: ") + Out.dim("(EOF)"))
+    return "\n".join(out)
+
+
+def head_tail(path: Path, lines: int = HEAD_LINES, width: int = 200) -> str:
     """長いときは最初と最後を lines 行ずつ。インタラクティブの失敗はたいてい最後の方にある。"""
     text = path.read_text(errors="replace").splitlines()
     if len(text) <= 2 * lines:
@@ -1053,6 +1184,14 @@ def show_failure(d: Path, v: Verdict, case_id: str, repro: str, workdir: Path) -
     if (d / "out_ref.txt").exists():
         Out.log(Out.yellow("---- guchoku ----"))
         Out.log(head(d / "out_ref.txt"))
+    if (v.kind == "WA" and v.diff_lines is not None
+            and (d / "out_main.txt").exists() and (d / "out_ref.txt").exists()):
+        line_m, line_r = v.diff_lines
+        if line_m > HEAD_LINES or line_r > HEAD_LINES:
+            Out.log(Out.yellow(f"---- diff: main (line {line_m}) ----"))
+            Out.log(around(d / "out_main.txt", line_m))
+            Out.log(Out.yellow(f"---- diff: guchoku (line {line_r}) ----"))
+            Out.log(around(d / "out_ref.txt", line_r))
     for name in ("stderr_main.txt", "stderr_ref.txt", "stderr_checker.txt", "stderr_interactor.txt"):
         p = d / name
         if p.exists() and p.stat().st_size:
@@ -1532,10 +1671,13 @@ def cmd_run(opt: argparse.Namespace) -> int:
     n_done = 0
     last_status = 0.0
     leftover = LeftoverStats()
+    stats = RunStats()
 
     def on_result(idx: int, case: Case, v: Verdict) -> None:
         nonlocal slowest, most_queries, n_done, last_status
         leftover.add(idx, case, v)
+        if opt.stats:
+            stats.add(v)
         slowest = max(slowest, v.elapsed)
         if v.queries and (most_queries is None or v.queries[0] > most_queries[0]):
             most_queries = v.queries
@@ -1556,6 +1698,8 @@ def cmd_run(opt: argparse.Namespace) -> int:
                     f"  {time.monotonic() - start:.1f}s"
                     + Out.dim(f"  base_seed={base}"))
             leftover.report(n_done)
+            if opt.stats:
+                stats.report()
             return EXIT_OK
         idx, case, v, d = found
         leftover.report(n_done)
@@ -1563,6 +1707,8 @@ def cmd_run(opt: argparse.Namespace) -> int:
         if v.kind in TOOL_FAILURES:
             Out.log(Out.red(v.kind) + f"  {v.detail}")
             Out.log(Out.dim(f"case={case.id}"))
+            if opt.stats:
+                stats.report()
             return EXIT_ERROR
 
         if opt.shrink and (case.cap or 1) > 1:
@@ -1594,9 +1740,93 @@ def cmd_run(opt: argparse.Namespace) -> int:
         if opt.to_in:
             copy_to_in(workdir, dest / "in.txt")
         Out.log(Out.dim(f"found after {idx + 1} cases ({time.monotonic() - start:.1f}s)"))
+        if opt.stats:
+            stats.report()
         return EXIT_FOUND
     finally:
         runner.close()
+
+
+def _fmt_pct(cnt: int, total: int) -> str:
+    if cnt <= 0:
+        return "0%"
+    if cnt >= total:
+        return "100%"
+    pct = cnt * 100 / total
+    if pct < 0.05:
+        return "<0.1%"
+    if pct < 1:
+        return f"{pct:.1f}%"
+    if pct > 99.95:
+        return ">99.9%"
+    if pct > 99:
+        return f"{pct:.1f}%"
+    return f"{pct:.0f}%"
+
+
+class RunStats:
+    """st run で、愚直解の先頭トークンと g.tag の分布を集計する。"""
+
+    ANS_CAP = 64         # 追跡する先頭トークンの種類数の上限
+    ANS_DETAIL_MAX = 5   # この種類数以下なら内訳を出す
+    ANS_WARN_MIN = 10    # 偏り・全一致の警告を出す最小ケース数
+    TAG_DISPLAY_MAX = 10
+
+    def __init__(self) -> None:
+        self.ans_total = 0
+        self.ans_counts: dict[str, int] = {}
+        self.ans_overflow = 0  # ANS_CAP を超えて記録しなかった件数
+        self.tag_counts: dict[str, int] = {}
+
+    def add(self, v: Verdict) -> None:
+        if v.first_token is not None:
+            self.ans_total += 1
+            tok = v.first_token
+            if tok in self.ans_counts:
+                self.ans_counts[tok] += 1
+            elif len(self.ans_counts) < self.ANS_CAP:
+                self.ans_counts[tok] = 1
+            else:
+                self.ans_overflow += 1
+        for name in v.tags:
+            self.tag_counts[name] = self.tag_counts.get(name, 0) + 1
+
+    def lines(self) -> list[tuple[str, str]]:
+        """表示する (style, text) の列。style は 'warn' または 'dim'。"""
+        out: list[tuple[str, str]] = []
+        if self.ans_total >= 2 and self.ans_counts:
+            items = sorted(self.ans_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+            if self.ans_overflow == 0 and len(items) <= self.ANS_DETAIL_MAX:
+                if len(items) == 1:
+                    tok, cnt = items[0]
+                    if self.ans_total >= self.ANS_WARN_MIN:
+                        out.append(("warn", f"答え（先頭トークン）がすべて同じです: {tok} ({cnt}/{self.ans_total})"))
+                    else:
+                        out.append(("dim", f"答え: {tok} {cnt} (100%)"))
+                else:
+                    parts = [f"{tok} {cnt} ({_fmt_pct(cnt, self.ans_total)})" for tok, cnt in items]
+                    out.append(("dim", "答え: " + ", ".join(parts)))
+            else:
+                tok, cnt = items[0]
+                if self.ans_total >= self.ANS_WARN_MIN and cnt * 5 >= self.ans_total * 4:
+                    rest = self.ans_total - cnt
+                    out.append(("warn", f"答え（先頭トークン）が偏っています: "
+                                f"{tok} {cnt} ({_fmt_pct(cnt, self.ans_total)}), "
+                                f"他 {rest} ({_fmt_pct(rest, self.ans_total)})"))
+        if self.tag_counts:
+            tags = sorted(self.tag_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+            shown = [f"{name} {cnt}" for name, cnt in tags[:self.TAG_DISPLAY_MAX]]
+            if len(tags) > self.TAG_DISPLAY_MAX:
+                shown.append(f"他 {len(tags) - self.TAG_DISPLAY_MAX} 種類")
+            out.append(("dim", "タグ: " + ", ".join(shown)))
+        return out
+
+    def report(self) -> None:
+        for style, text in self.lines():
+            if style == "warn":
+                Out.log(Out.yellow("warning: ") + text)
+            else:
+                Out.log(Out.dim(text))
 
 
 class LeftoverStats:
@@ -1681,6 +1911,13 @@ def cmd_make(opt: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def fmt_rss(kb: int | None, width: int = 0) -> str:
+    if kb is None:
+        return ""
+    mb = kb / 1024
+    return f"{mb:{width}.1f}MB" if width else f"{mb:.1f}MB"
+
+
 def cmd_bench(opt: argparse.Namespace) -> int:
     workdir = Path.cwd()
     progs, _ = prepare(opt, workdir, {"main"})
@@ -1690,6 +1927,7 @@ def cmd_bench(opt: argparse.Namespace) -> int:
     benchdir.mkdir(parents=True)
     tmp = work_root(workdir)
     worst = 0.0
+    worst_rss: int | None = None
     bad_count = 0
     for k, case in enumerate(make_cases(opt, progs)):
         fresh_dir(tmp)
@@ -1703,21 +1941,26 @@ def cmd_bench(opt: argparse.Namespace) -> int:
         kb = (tmp / "in.txt").stat().st_size / 1024
         if r.status == "OK":
             worst = max(worst, r.elapsed)
+            if r.maxrss_kb is not None:
+                worst_rss = r.maxrss_kb if worst_rss is None else max(worst_rss, r.maxrss_kb)
             ms = r.elapsed * 1000
             mark = Out.yellow(f"{ms:7.0f}ms") if r.elapsed > opt.tl * 0.8 else f"{ms:7.0f}ms"
-            Out.log(f"{label:<20} {mark}  " + Out.dim(f"input {kb:.0f}KB  case={case.id}"))
+            rss = f"  {fmt_rss(r.maxrss_kb, 6)}" if r.maxrss_kb is not None else ""
+            Out.log(f"{label:<20} {mark}{rss}  " + Out.dim(f"input {kb:.0f}KB  case={case.id}"))
             for name, what in read_leftover(tmp).items():
                 Out.log(Out.yellow("  warning: ") + f"{LEFTOVER_LABEL[name]} が入力を読み残しています: {what}")
         else:
             bad_count += 1
             what = {"TLE": f"TLE (> {opt.tl}s)", "OLE": f"OLE (> {opt.output_limit:g} MB)"}.get(
                 r.status, f"RE ({describe_code(r.code)})")
-            Out.log(f"{label:<20} {Out.red(what)}  " + Out.dim(f"input {kb:.0f}KB  case={case.id}"))
+            rss = f"  {fmt_rss(r.maxrss_kb)}" if r.maxrss_kb is not None else ""
+            Out.log(f"{label:<20} {Out.red(what)}{rss}  " + Out.dim(f"input {kb:.0f}KB  case={case.id}"))
     Out.log(Out.dim(f"inputs: {benchdir.relative_to(workdir)}/"))
     if bad_count:
         Out.log(Out.red(f"{bad_count} case(s) failed") + f"  (TL {opt.tl}s)")
         return EXIT_FOUND
-    Out.log(Out.green("OK") + f"  max {worst * 1000:.0f}ms  (TL {opt.tl}s)")
+    rss_sum = f"  max {fmt_rss(worst_rss)}" if worst_rss is not None else ""
+    Out.log(Out.green("OK") + f"  max {worst * 1000:.0f}ms{rss_sum}  (TL {opt.tl}s)")
     return EXIT_OK
 
 
@@ -1727,7 +1970,9 @@ def cmd_last(opt: argparse.Namespace) -> int:
     if not last.exists():
         die("no saved failure in .stress/")
     meta = json.loads((last / "meta.json").read_text())
-    v = Verdict(meta["kind"], meta.get("detail", ""))
+    dl = meta.get("diff_lines")
+    diff_lines = (int(dl[0]), int(dl[1])) if isinstance(dl, list) and len(dl) == 2 else None
+    v = Verdict(meta["kind"], meta.get("detail", ""), diff_lines=diff_lines)
     case_id = meta.get("case", f"{meta['seed']}:{meta['cap']}")
     show_failure(last.resolve(), v, case_id, meta.get("repro", f"st repro {case_id}"), workdir)
     if opt.to_in:
@@ -1862,7 +2107,7 @@ def parse(argv: list[str]) -> argparse.Namespace:
         "サブコマンド (st <コマンド> --help で詳細):",
         "  repro     SEED:CAP:NAME のケースを 1 つ再現する",
         "  make      入力ファイルだけ書き出す",
-        "  bench     生成した入力で main の実行時間を測る",
+        "  bench     生成した入力で main の実行時間と最大メモリを測る",
         "  last      直前の失敗を表示する",
         "  restore   退避した手書きの in.txt（.stress/in.txt.bak）を戻す",
         "  clean     .stress/ の失敗ケースを消す",
@@ -1884,6 +2129,8 @@ def parse(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--no-shrink", dest="shrink", action="store_false", help="失敗後の縮小をしない")
     p.add_argument("--shrink-tries", type=positive_int, default=200, help="縮小で cap 1 つあたりに試す回数 (default: 200)")
     p.add_argument("--shrink-time", type=positive_float, default=20.0, help="縮小にかける時間の上限 [s] (default: 20)")
+    p.add_argument("--no-stats", dest="stats", action="store_false",
+                   help="終了時に答えとタグの分布を出さない（既定では出す）")
 
     p = p_repro = sub.add_parser("repro", help="SEED:CAP:NAME のケースを 1 つ再現する")
     add_common(p)
@@ -1894,7 +2141,7 @@ def parse(argv: list[str]) -> argparse.Namespace:
     add_cases(p, 5)
     p.add_argument("-o", "--out", default="cases", help="出力先 (default: cases/)")
 
-    p = sub.add_parser("bench", help="生成した入力で main の実行時間を測る")
+    p = sub.add_parser("bench", help="生成した入力で main の実行時間と最大メモリを測る")
     add_build(p)
     add_cases(p, 3)
     p.add_argument("--main", default="main.cpp", help="解答 (default: main.cpp)")

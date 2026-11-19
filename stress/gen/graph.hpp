@@ -25,6 +25,7 @@ struct Edges : std::vector<Edge> {
 
 struct TreeOpt {
     TreeShape shape = TreeShape::mixed;
+    bool rooted = false;   // true なら根を頂点 1（0 始まりなら 0）に固定する
     bool ordered = false;  // true なら各辺 "u v" を常に u < v で出す
     Value w{};
 };
@@ -73,7 +74,8 @@ class GraphOps {
     Edges tree(ll n, TreeOpt opt = {}) {
         if (n <= 0) gen_error("tree: n must be positive");
         auto raw = raw_tree(n, opt.shape, "tree");
-        return finish_edges(n, raw, opt.w, /*shuffle_labels=*/true, /*directed=*/false, -1, opt.ordered);
+        return finish_edges(n, raw, opt.w, /*shuffle_labels=*/true, /*directed=*/false, opt.rooted ? 0 : -1,
+                            opt.ordered);
     }
 
     // 根付き木の親の列。

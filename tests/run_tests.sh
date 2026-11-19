@@ -923,6 +923,346 @@ check leftover_bench 0 st bench --main main.cpp -n 1 --seed 1
 log_has leftover_bench_msg leftover_bench 'main が入力を読み残しています'
 # インタラクティブ（main の stdin はパイプ）では何も出ない
 log_lacks leftover_inter inter_ok '読み残し'
+log_lacks stats_inter_no_ans inter_ok '答え（先頭トークン）|^答え:'
+
+# PR C の単体テスト: read_first_token / RunStats / compare の行番号 / around / wait_exit の RSS
+check py_prc_units 0 python3 -B - "$root" "$build_dir/prc_units" << 'PY'
+import importlib.util, os, shutil, sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("stress_mod", root / "stress.py")
+mod = importlib.util.module_from_spec(spec)
+sys.modules["stress_mod"] = mod
+spec.loader.exec_module(mod)
+
+w = Path(sys.argv[2])
+shutil.rmtree(w, ignore_errors=True)
+w.mkdir(parents=True)
+
+# read_first_token
+def rft(data: bytes):
+    p = w / "tok.txt"
+    p.write_bytes(data)
+    return mod.read_first_token(p)
+
+assert rft(b"Yes\n1 2 3\n") == "Yes"
+assert rft(b"  \t\n  No\n") == "No"
+assert rft(b"") == "(empty)"
+assert rft(b"  \n\t\r\n") == "(empty)"
+assert rft(b"a" * 40 + b"\n") == "a" * 40
+assert rft(b"a" * 41 + b"\n") == "a" * 37 + "..."
+assert rft(b"b" * 200_000) == "b" * 37 + "..."
+assert rft(b" " * 4094 + b"ab" + b"cd\n") == "abcd"
+assert rft(b" " * 4094 + b"ab" + b" cd\n") == "ab"
+assert rft(b" " * 70_000 + b"Yes\n") is None
+assert mod.read_first_token(w / "missing.txt") is None
+
+# _fmt_pct
+assert mod._fmt_pct(0, 100) == "0%"
+assert mod._fmt_pct(100, 100) == "100%"
+assert mod._fmt_pct(1, 1000) == "0.1%"
+assert mod._fmt_pct(999, 1000) == "99.9%"
+assert mod._fmt_pct(1, 10000) == "<0.1%"
+assert mod._fmt_pct(9999, 10000) == ">99.9%"
+assert mod._fmt_pct(50, 100) == "50%"
+
+# RunStats (案B)
+s = mod.RunStats()
+s.add(mod.Verdict("OK", first_token="Yes"))
+assert s.lines() == []  # 1 ケースだけでは出さない
+
+s = mod.RunStats()
+for _ in range(5):
+    s.add(mod.Verdict("OK", first_token="No"))
+assert s.lines() == [("dim", "答え: No 5 (100%)")]  # 10 ケース未満は警告なし
+
+s = mod.RunStats()
+for _ in range(10):
+    s.add(mod.Verdict("OK", first_token="No"))
+assert s.lines() == [("warn", "答え（先頭トークン）がすべて同じです: No (10/10)")]
+
+s = mod.RunStats()
+for tok in ["Yes"] * 7 + ["No"] * 3:
+    s.add(mod.Verdict("OK", first_token=tok))
+assert s.lines() == [("dim", "答え: Yes 7 (70%), No 3 (30%)")]
+
+# 6 種類以上で均等 → 出さない
+s = mod.RunStats()
+for i in range(60):
+    s.add(mod.Verdict("OK", first_token=str(i % 6)))
+assert s.lines() == []
+
+# 6 種類以上でも 80% 以上偏っていれば warning
+s = mod.RunStats()
+for _ in range(80):
+    s.add(mod.Verdict("OK", first_token="0"))
+for i in range(1, 21):
+    s.add(mod.Verdict("OK", first_token=str(i)))
+assert s.lines() == [("warn", "答え（先頭トークン）が偏っています: 0 80 (80%), 他 20 (20%)")]
+
+# 79% は warning にしない
+s = mod.RunStats()
+for _ in range(79):
+    s.add(mod.Verdict("OK", first_token="0"))
+for i in range(1, 22):
+    s.add(mod.Verdict("OK", first_token=str(i)))
+assert s.lines() == []
+
+# 64 種類を超える場合も追跡辞書は 64 個で頭打ち
+s = mod.RunStats()
+for i in range(200):
+    s.add(mod.Verdict("OK", first_token=str(i)))
+assert len(s.ans_counts) == mod.RunStats.ANS_CAP and s.ans_overflow == 200 - mod.RunStats.ANS_CAP
+assert s.lines() == []
+
+# 64 種類を超えても最多が 80% 以上なら warning
+s = mod.RunStats()
+for _ in range(800):
+    s.add(mod.Verdict("OK", first_token="0"))
+for i in range(1, 201):
+    s.add(mod.Verdict("OK", first_token=str(i)))
+assert len(s.ans_counts) == mod.RunStats.ANS_CAP and s.ans_overflow > 0
+assert s.lines() == [("warn", "答え（先頭トークン）が偏っています: 0 800 (80%), 他 200 (20%)")]
+
+# タグ: 上位 10 個 + 他 N 種類
+s = mod.RunStats()
+for i in range(12):
+    for _ in range(12 - i):
+        s.add(mod.Verdict("OK", tags=[f"t{i:02d}"]))
+lines = s.lines()
+assert len(lines) == 1 and lines[0][0] == "dim" and "t00 12" in lines[0][1] and "他 2 種類" in lines[0][1], lines
+
+# compare の diff_lines と around
+a = "\n".join(str(i) for i in range(1, 31)).encode() + b"\n"
+b = "\n".join("999" if i == 25 else str(i) for i in range(1, 31)).encode() + b"\n"
+assert mod.compare(a, a, "token") == (True, "", None)
+ok, why, dl = mod.compare(a, b, "token")
+assert not ok and dl == (25, 25), (ok, why, dl)
+ok, why, dl = mod.compare(a, b, "exact")
+assert not ok and dl == (25, 25), (ok, why, dl)
+ok, why, dl = mod.compare(b" ".join(str(i).encode() for i in range(1, 31)) + b"\n", b, "token")
+assert not ok and dl == (1, 25), (ok, why, dl)
+short_a = "\n".join(str(i) for i in range(1, 26)).encode() + b"\n"
+ok, why, dl = mod.compare(short_a, a, "token")
+assert not ok and dl == (26, 26), (ok, why, dl)
+af = "\n".join(f"{i}.0" for i in range(1, 31)).encode() + b"\n"
+bf = "\n".join("25.05" if i == 25 else f"{i}.0" for i in range(1, 31)).encode() + b"\n"
+assert mod.compare(af, af, "float:1e-3") == (True, "", None)
+ok, why, dl = mod.compare(af, bf, "float:1e-3")
+assert not ok and dl == (25, 25), (ok, why, dl)
+
+pa = w / "short.txt"
+pa.write_bytes(short_a)
+mod.Out.color = False
+snip = mod.around(pa, 26)
+assert "  23: 23" in snip and "  25: 25" in snip and "> 26: (EOF)" in snip, snip
+
+# wait_exit / run の Peak RSS（pidfd 経路と WNOHANG フォールバックの両方）
+r1 = mod.run([sys.executable, "-c", "pass"], None, w / "o1", w / "e1", 5.0, w)
+assert r1.status == "OK" and r1.code == 0 and r1.maxrss_kb is not None and r1.maxrss_kb > 0, r1
+orig_pidfd = getattr(os, "pidfd_open", None)
+try:
+    def no_pidfd(pid):
+        raise OSError("disabled")
+    os.pidfd_open = no_pidfd
+    r2 = mod.run([sys.executable, "-c", "pass"], None, w / "o2", w / "e2", 5.0, w)
+    assert r2.status == "OK" and r2.code == 0 and r2.maxrss_kb is not None and r2.maxrss_kb > 0, r2
+finally:
+    if orig_pidfd is not None:
+        os.pidfd_open = orig_pidfd
+PY
+
+# 答えとタグの分布（st run）
+work_st="$build_dir/stats"
+rm -rf "$work_st" && mkdir -p "$work_st" && cd "$work_st"
+cat > gen.cpp << 'EOF'
+#include "stress/gen.hpp"
+STRESS_GEN(yn) {
+    int v = g.coin() ? 1 : 0;
+    g.tag(v ? "kind=yes" : "kind=no");
+    g.out("yn", v);
+}
+STRESS_GEN(const_no) {
+    g.tag("fixed");
+    g.out("const", 0);
+}
+STRESS_GEN(many) {
+    g.out("many", g.i(0, 99));
+}
+STRESS_GEN(biased) {
+    int v = g.coin(0.9) ? 0 : g.i(1, 20);
+    g.out("biased", v);
+}
+STRESS_GEN(yn_late) {
+    int v = g.coin() ? 1 : 0;
+    int sz = g.size(1, 10);
+    g.tag(v ? "kind=yes" : "kind=no");
+    g.out("yn_late", v, sz);
+}
+EOF
+cat > guchoku.cpp << 'EOF'
+#include <iostream>
+#include <string>
+int main() {
+    std::string mode;
+    int v;
+    std::cin >> mode >> v;
+    if (mode == "yn" || mode == "yn_late") {
+        if (mode == "yn_late") { int sz; std::cin >> sz; }
+        if (v) std::cout << "Yes\n1 2 3\n";
+        else std::cout << "No\n";
+    } else if (mode == "const") {
+        std::cout << "No\n";
+    } else {
+        std::cout << v << "\n";
+    }
+}
+EOF
+cp guchoku.cpp main.cpp
+cat > main_wa_late.cpp << 'EOF'
+#include <iostream>
+#include <string>
+int main() {
+    std::string mode;
+    int v;
+    std::cin >> mode >> v;
+    if (mode == "yn_late") {
+        int sz;
+        std::cin >> sz;
+        if (sz >= 2) { std::cout << "WRONG\n"; return 0; }
+        if (v) std::cout << "Yes\n1 2 3\n";
+        else std::cout << "No\n";
+    } else {
+        std::cout << v << "\n";
+    }
+}
+EOF
+cat > checker.cpp << 'EOF'
+#include "stress/judge.hpp"
+void judge(Judge& j) { (void)j; }
+EOF
+check stats_yn 0 st -g yn -n 40 --seed 1
+log_has stats_yn_ans stats_yn '^答え: (Yes [0-9]+ \([0-9.]+%\), No [0-9]+ \([0-9.]+%\)|No [0-9]+ \([0-9.]+%\), Yes [0-9]+ \([0-9.]+%\))$'
+log_has stats_yn_tag stats_yn '^タグ: .*kind='
+check stats_yn_par 0 st -g yn -n 40 --seed 1 -j 4
+a1="$(grep -E '^答え: ' "$build_dir/stats_yn.log")"
+a4="$(grep -E '^答え: ' "$build_dir/stats_yn_par.log")"
+t1="$(grep -E '^タグ: ' "$build_dir/stats_yn.log")"
+t4="$(grep -E '^タグ: ' "$build_dir/stats_yn_par.log")"
+if [ -n "$a1" ] && [ "$a1" = "$a4" ] && [ -n "$t1" ] && [ "$t1" = "$t4" ]; then echo "ok   stats_par_same"; else echo "FAIL stats_par_same ($a1 / $a4 | $t1 / $t4)"; fail=1; fi
+check stats_all_same 0 st -g const_no -n 20 --seed 1
+log_has stats_all_same_warn stats_all_same '^warning: 答え（先頭トークン）がすべて同じです: No \(20/20\)$'
+log_has stats_all_same_tag  stats_all_same '^タグ: fixed 20$'
+check stats_many 0 st -g many -n 40 --seed 1
+log_lacks stats_many_quiet stats_many '答え（先頭トークン）|^答え:'
+check stats_biased 0 st -g biased -n 100 --seed 1
+log_has stats_biased_warn stats_biased '^warning: 答え（先頭トークン）が偏っています: 0 [0-9]+ \([0-9.]+%\), 他 [0-9]+ \([0-9.]+%\)$'
+check stats_off 0 st -g yn -n 40 --seed 1 --no-stats
+log_lacks stats_off_no_ans stats_off '答え'
+log_lacks stats_off_no_tag stats_off '^タグ:'
+check stats_checker_noref 0 st -c checker.cpp -g yn -n 20 --seed 1
+log_lacks stats_checker_noref_no_ans stats_checker_noref '答え'
+log_has   stats_checker_noref_tag    stats_checker_noref '^タグ: '
+check stats_checker_ref 0 st -c checker.cpp --ref -g yn -n 20 --seed 1
+log_has stats_checker_ref_ans stats_checker_ref '^答え: '
+log_has stats_checker_ref_tag stats_checker_ref '^タグ: '
+check stats_wa 1 st --main main_wa_late.cpp -g yn_late -n 40 --seed 1 --no-shrink --no-to-in
+log_has stats_wa_ans stats_wa '^答え: '
+log_has stats_wa_tag stats_wa '^タグ: '
+log_has bench_tle_rss bench_tle '[0-9]+\.[0-9]MB'
+
+# WA の位置の前後を表示（20 行目より後のときだけ diff ブロックを追加、st last でも再現）
+work_df="$build_dir/diff"
+rm -rf "$work_df" && mkdir -p "$work_df" && cd "$work_df"
+cat > gen.cpp << 'EOF'
+#include "stress/gen.hpp"
+void gen(Gen& g) { g.out(30); (void)g; }
+EOF
+cat > guchoku.cpp << 'EOF'
+#include <iostream>
+int main() { int n; std::cin >> n; for (int i = 1; i <= n; ++i) std::cout << i << "\n"; }
+EOF
+cat > main_line5.cpp << 'EOF'
+#include <iostream>
+int main() { int n; std::cin >> n; for (int i = 1; i <= n; ++i) std::cout << (i == 5 ? 999 : i) << "\n"; }
+EOF
+cat > main_line25.cpp << 'EOF'
+#include <iostream>
+int main() { int n; std::cin >> n; for (int i = 1; i <= n; ++i) std::cout << (i == 25 ? 999 : i) << "\n"; }
+EOF
+cat > main_short25.cpp << 'EOF'
+#include <iostream>
+int main() { int n; std::cin >> n; for (int i = 1; i <= 25; ++i) std::cout << i << "\n"; }
+EOF
+cat > main_float25.cpp << 'EOF'
+#include <iomanip>
+#include <iostream>
+int main() {
+    int n; std::cin >> n;
+    std::cout << std::fixed << std::setprecision(4);
+    for (int i = 1; i <= n; ++i) std::cout << (i == 25 ? 25.05 : double(i)) << "\n";
+}
+EOF
+check diff_line5 1 st --main main_line5.cpp -n 1 --seed 1 --no-shrink --no-to-in
+log_lacks diff_line5_none diff_line5 '^---- diff:'
+check diff_line25_token 1 st --main main_line25.cpp -n 1 --seed 1 --no-shrink --no-to-in
+log_has diff_line25_token_hm  diff_line25_token '^---- diff: main \(line 25\) ----$'
+log_has diff_line25_token_bm  diff_line25_token '^> 25: 999$'
+log_has diff_line25_token_ctx diff_line25_token '^  22: 22$'
+log_has diff_line25_token_hr  diff_line25_token '^---- diff: guchoku \(line 25\) ----$'
+log_has diff_line25_token_br  diff_line25_token '^> 25: 25$'
+check diff_line25_last 0 st last
+log_has diff_line25_last_hm diff_line25_last '^---- diff: main \(line 25\) ----$'
+log_has diff_line25_last_bm diff_line25_last '^> 25: 999$'
+check diff_line25_exact 1 st --main main_line25.cpp --cmp exact -n 1 --seed 1 --no-shrink --no-to-in
+log_has diff_line25_exact_hm diff_line25_exact '^---- diff: main \(line 25\) ----$'
+log_has diff_line25_exact_bm diff_line25_exact '^> 25: 999$'
+check diff_line25_float 1 st --main main_float25.cpp --cmp float:1e-3 -n 1 --seed 1 --no-shrink --no-to-in
+log_has diff_line25_float_hm diff_line25_float '^---- diff: main \(line 25\) ----$'
+log_has diff_line25_float_bm diff_line25_float '^> 25: 25\.0500$'
+check diff_short25 1 st --main main_short25.cpp -n 1 --seed 1 --no-shrink --no-to-in
+log_has diff_short25_eof diff_short25 '^> 26: \(EOF\)$'
+log_has diff_short25_ref diff_short25 '^> 26: 26$'
+
+# st bench の最大メモリ表示（MB）
+work_rss="$build_dir/rss"
+rm -rf "$work_rss" && mkdir -p "$work_rss" && cd "$work_rss"
+cat > gen.cpp << 'EOF'
+#include "stress/gen.hpp"
+STRESS_BIG(big) { g.out(1); }
+EOF
+cat > main_small.cpp << 'EOF'
+#include <iostream>
+int main() { int x; std::cin >> x; std::cout << x << "\n"; }
+EOF
+cat > main_bigmem.cpp << 'EOF'
+#include <iostream>
+#include <vector>
+int main() {
+    int x;
+    std::cin >> x;
+    std::vector<char> buf(40 << 20, 1);  // 40 MB 確保して全ページに触る
+    long long s = 0;
+    for (size_t i = 0; i < buf.size(); i += 4096) s += buf[i];
+    std::cout << (s + x) << "\n";
+}
+EOF
+check bench_rss_small 0 st bench --main main_small.cpp -n 2 --seed 1
+log_has bench_rss_small_row bench_rss_small 'big-01 .*[0-9]+ms +[0-9]+\.[0-9]MB'
+log_has bench_rss_small_ok  bench_rss_small '^OK  max [0-9]+ms  max [0-9]+\.[0-9]MB'
+check bench_rss_big 0 st bench --main main_bigmem.cpp -n 1 --seed 1
+check bench_rss_compare 0 python3 - "$build_dir/bench_rss_small.log" "$build_dir/bench_rss_big.log" << 'PY'
+import re, sys
+from pathlib import Path
+def max_mb(p):
+    m = re.search(r"OK  max \d+ms  max (\d+\.\d+)MB", Path(p).read_text())
+    assert m, Path(p).read_text()
+    return float(m.group(1))
+small = max_mb(sys.argv[1])
+big = max_mb(sys.argv[2])
+assert big >= 30.0 and big - small >= 20.0, (small, big)
+PY
 
 # 後片付け: テストで使った各ディレクトリで st clean を呼び、/dev/shm 側の作業場所も消えることを確かめる
 clean_bad=""

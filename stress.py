@@ -143,6 +143,7 @@ class BuildConfig:
     workdir: Path
     sanitize: bool = False
     extra: list[str] = field(default_factory=list)
+    leftover: bool = True  # main と愚直解に stress/leftover.hpp を差し込む（--no-leftover で外す）
 
     def include_dirs(self) -> list[Path]:
         dirs = [TOOL_ROOT]
@@ -154,7 +155,7 @@ class BuildConfig:
             dirs.append(lib)
         return dirs
 
-    def flags(self, src: Path, use_pch: bool) -> list[str]:
+    def flags(self, src: Path, use_pch: bool, name: str = "") -> list[str]:
         f = ["-std=gnu++20", "-O2", "-DLOCAL"]
         if not self.sanitize:
             # 静的リンクにすると、起動のたびの動的リンク（libstdc++ の読み込み）が無くなり、1 回 0.5 ms ほど速く起動する。
@@ -166,6 +167,9 @@ class BuildConfig:
         elif use_pch and self._pch_usable(src):
             # 問題のディレクトリの PCH を使う（フラグが合わなければ g++ が黙って無視する）
             f += ["-include", "pch_acl.hpp"]
+        if self.leftover and name in LEFTOVER_PROGS:
+            # 入力の読み残しを調べる。PCH より後ろに置く（前にあると PCH が使われなくなる）
+            f += ["-include", str(TOOL_ROOT / "stress" / "leftover.hpp"), f"-DSTRESS_LEFTOVER_NAME={name}"]
         return f + self.extra
 
     def _pch_usable(self, src: Path) -> bool:
@@ -182,7 +186,7 @@ def build(cfg: BuildConfig, src: Path, name: str, use_pch: bool = True) -> Path:
     """必要なときだけビルドする。依存は g++ -MMD の .d ファイルで追う。"""
     bindir = cfg.workdir / ".stress" / "bin"
     bindir.mkdir(parents=True, exist_ok=True)
-    flags = cfg.flags(src, use_pch)
+    flags = cfg.flags(src, use_pch, name)
     tag = hashlib.sha1((str(src.resolve()) + "\0" + " ".join(flags)).encode()).hexdigest()[:8]
     exe = bindir / f"{name}-{tag}"
     dep = exe.with_suffix(".d")
@@ -190,9 +194,9 @@ def build(cfg: BuildConfig, src: Path, name: str, use_pch: bool = True) -> Path:
         return exe
     cmd = ["g++", *flags, str(src), "-o", str(exe), "-MMD", "-MF", str(dep)]
     proc = subprocess.run(cmd, cwd=cfg.workdir, capture_output=True, text=True)
-    if proc.returncode != 0 and use_pch and "-include" in flags and not (cfg.workdir / "pch_acl.hpp").exists() and "pch_acl.hpp:" in proc.stderr:
+    if proc.returncode != 0 and use_pch and "pch_acl.hpp" in flags and not (cfg.workdir / "pch_acl.hpp").exists() and "pch_acl.hpp:" in proc.stderr:
         # pch_acl.hpp 本体が無くフラグ不一致で .gch を使えなかったときは、PCH なしでやり直す
-        flags = cfg.flags(src, False)  # このあと静的リンクなしでやり直すときも PCH なしのまま
+        flags = cfg.flags(src, False, name)  # このあと静的リンクなしでやり直すときも PCH なしのまま
         proc = subprocess.run(["g++", *flags, str(src), "-o", str(exe), "-MMD", "-MF", str(dep)],
                               cwd=cfg.workdir, capture_output=True, text=True)
     if proc.returncode != 0 and "-static" in flags and _link_error(proc.stderr):
@@ -485,6 +489,7 @@ class Verdict:
     detail: str = ""
     elapsed: float = 0.0
     queries: tuple[int, int] | None = None  # インタラクティブ: (使った回数, 制限 or -1)
+    leftover: dict[str, str] = field(default_factory=dict)  # 入力を読み残したプログラム -> "3 行目から（残り 1 行）: 5 3 2"
 
 
 @dataclass
@@ -609,6 +614,25 @@ def fresh_dir(d: Path) -> Path:
 
 
 def run_case(progs: Programs, case: Case, d: Path, opt: argparse.Namespace) -> Verdict:
+    v = _run_case(progs, case, d, opt)
+    v.leftover = read_leftover(d)
+    return v
+
+
+def read_leftover(d: Path) -> dict[str, str]:
+    """leftover.hpp がケースのディレクトリに書いた結果を読む（読み残しが無ければファイルは無い）。"""
+    found = {}
+    for name in LEFTOVER_PROGS:
+        try:
+            text = (d / f"leftover_{name}.txt").read_text(errors="replace").rstrip("\n")
+        except OSError:
+            continue
+        line, lines, preview = (text.split("\t", 2) + ["", ""])[:3]
+        found[name] = f"{line} 行目から（残り {lines} 行）: {preview}"
+    return found
+
+
+def _run_case(progs: Programs, case: Case, d: Path, opt: argparse.Namespace) -> Verdict:
     fresh_dir(d)
     inp = d / "in.txt"
     if (bad := generate(progs, case, d, opt)) is not None:
@@ -1010,6 +1034,8 @@ def copy_to_in(workdir: Path, src: Path) -> None:
 # ---------------------------------------------------------------- 最小化（サイズ縮小）
 
 
+LEFTOVER_PROGS = ("main", "ref")  # leftover.hpp を差し込むプログラム（ビルドの名前）
+LEFTOVER_LABEL = {"main": "main", "ref": "guchoku"}
 TOOL_FAILURES = ("GEN_FAIL", "CHECKER_FAIL", "INTERACTOR_FAIL")  # 道具の側のバグ。解答の失敗としては扱わない
 
 
@@ -1251,7 +1277,8 @@ def prepare(opt: argparse.Namespace, workdir: Path, need: set[str]) -> tuple[Pro
         extra = shlex.split(raw_flags) if raw_flags else []
     except ValueError as e:
         die(f"invalid --cxxflags: {e}")
-    cfg = BuildConfig(workdir, sanitize=getattr(opt, "san", False), extra=extra)
+    cfg = BuildConfig(workdir, sanitize=getattr(opt, "san", False), extra=extra,
+                      leftover=getattr(opt, "leftover", True))
     sources = {"gen": find_source(workdir, opt.gen_file, "generator")}
     if "main" in need:
         sources["main"] = find_source(workdir, opt.main, "solution")
@@ -1386,9 +1413,11 @@ def cmd_run(opt: argparse.Namespace) -> int:
     most_queries: tuple[int, int] | None = None
     n_done = 0
     last_status = 0.0
+    leftover = LeftoverStats()
 
     def on_result(idx: int, case: Case, v: Verdict) -> None:
         nonlocal slowest, most_queries, n_done, last_status
+        leftover.add(idx, case, v)
         slowest = max(slowest, v.elapsed)
         if v.queries and (most_queries is None or v.queries[0] > most_queries[0]):
             most_queries = v.queries
@@ -1408,8 +1437,10 @@ def cmd_run(opt: argparse.Namespace) -> int:
             Out.log(Out.green("OK") + f"  {n_done} cases  max {slowest * 1000:.0f}ms{fmt_queries(most_queries)}"
                     f"  {time.monotonic() - start:.1f}s"
                     + Out.dim(f"  base_seed={base}"))
+            leftover.report(n_done)
             return EXIT_OK
         idx, case, v, d = found
+        leftover.report(n_done)
 
         if v.kind in TOOL_FAILURES:
             Out.log(Out.red(v.kind) + f"  {v.detail}")
@@ -1450,6 +1481,34 @@ def cmd_run(opt: argparse.Namespace) -> int:
         runner.close()
 
 
+class LeftoverStats:
+    """st run で、入力を読み残したケースを数える。例は一番手前のケースを出す（-j でも同じになる）。"""
+
+    def __init__(self) -> None:
+        self.count = {name: 0 for name in LEFTOVER_PROGS}
+        self.first: dict[str, tuple[int, str, str]] = {}  # name -> (idx, case id, 中身)
+
+    def add(self, idx: int, case: Case, v: Verdict) -> None:
+        for name, what in v.leftover.items():
+            self.count[name] += 1
+            if name not in self.first or idx < self.first[name][0]:
+                self.first[name] = (idx, case.id, what)
+
+    def report(self, total: int) -> None:
+        for name in LEFTOVER_PROGS:
+            if not self.count[name]:
+                continue
+            _, cid, what = self.first[name]
+            Out.log(Out.yellow("warning: ") + f"{LEFTOVER_LABEL[name]} が {total} ケース中 {self.count[name]} ケースで"
+                    "入力を読み残しています")
+            Out.log(Out.dim(f"  例: case={cid}  {what}"))
+
+
+def report_leftover(v: Verdict) -> None:
+    for name, what in v.leftover.items():
+        Out.log(Out.yellow("warning: ") + f"{LEFTOVER_LABEL[name]} が入力を読み残しています: {what}")
+
+
 def cmd_repro(opt: argparse.Namespace) -> int:
     check_mode(opt)
     workdir = Path.cwd()
@@ -1457,6 +1516,7 @@ def cmd_repro(opt: argparse.Namespace) -> int:
     case = Case.parse(opt.case, progs.gens)
     run_dir = work_root(workdir)
     v = run_case(progs, case, run_dir, opt)
+    report_leftover(v)
     if v.kind == "OK":
         Out.log(Out.green("OK") + f"  case={case.id} (再現しなかった)")
         Out.log(Out.dim("input: .stress/run/in.txt"))
@@ -1520,6 +1580,8 @@ def cmd_bench(opt: argparse.Namespace) -> int:
             ms = r.elapsed * 1000
             mark = Out.yellow(f"{ms:7.0f}ms") if r.elapsed > opt.tl * 0.8 else f"{ms:7.0f}ms"
             Out.log(f"{label:<20} {mark}  " + Out.dim(f"input {kb:.0f}KB  case={case.id}"))
+            for name, what in read_leftover(tmp).items():
+                Out.log(Out.yellow("  warning: ") + f"{LEFTOVER_LABEL[name]} が入力を読み残しています: {what}")
         else:
             bad_count += 1
             what = {"TLE": f"TLE (> {opt.tl}s)", "OLE": f"OLE (> {opt.output_limit:g} MB)"}.get(
@@ -1622,6 +1684,12 @@ def add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--cmp", default=None, help="比較方法: token (default) / exact / float[:EPS]")
     p.add_argument("--no-to-in", dest="to_in", action="store_false",
                    help="失敗した入力を in.txt にコピーしない（既定ではコピーする）")
+    add_no_leftover(p)
+
+
+def add_no_leftover(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--no-leftover", dest="leftover", action="store_false",
+                   help="main と愚直解が入力を読み残していないかを調べない（既定では調べて警告を出す）")
 
 
 def add_output_limit(p: argparse.ArgumentParser) -> None:
@@ -1675,6 +1743,7 @@ def parse(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--main", default="main.cpp", help="解答 (default: main.cpp)")
     p.add_argument("--tl", type=float, default=2.0, help="制限時間 [s] (default: 2)")
     add_output_limit(p)
+    add_no_leftover(p)
 
     p = sub.add_parser("last", help="直前の失敗を表示する")
     p.add_argument("--to-in", action="store_true", help="失敗した入力を in.txt にコピーする")

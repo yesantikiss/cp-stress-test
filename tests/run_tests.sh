@@ -18,6 +18,9 @@ kind_is() {  # kind_is <check の名前> <判定>: その check が保存した�
     [ -n "$dir" ] && got="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]+"/meta.json"))["kind"])' "$dir" 2>/dev/null)"
     if [ "$got" = "$2" ]; then echo "ok   $1_kind"; else echo "FAIL $1_kind (kind '$got', want '$2')"; fail=1; fi
 }
+log_lacks() {  # log_lacks <名前> <check の名前> <grep -E のパターン>
+    if grep -qE "$3" "$build_dir/$2.log"; then echo "FAIL $1 (/$3/ in $2.log)"; grep -E "$3" "$build_dir/$2.log" | head -5; fail=1; else echo "ok   $1"; fi
+}
 log_has() {  # log_has <名前> <check の名前> <grep -E のパターン>
     if grep -qE "$3" "$build_dir/$2.log"; then echo "ok   $1"; else echo "FAIL $1 (no /$3/ in $2.log)"; tail -20 "$build_dir/$2.log"; fail=1; fi
 }
@@ -491,7 +494,8 @@ assert best == (0, "WA"), best
 assert not any("通った" in ln for ln in logs) and any("WA だった" in ln for ln in logs), logs
 PY
 
-# build: PCH なしでやり直したあとに静的リンクなしでもやり直すとき、-include も -static も付けない（g++ は偽物）
+# build: PCH なしでやり直したあとに静的リンクなしでもやり直すとき、PCH の -include も -static も付けない（g++ は偽物）。
+# 読み残しを調べる leftover.hpp の -include は、やり直しても残る
 check py_build_fallback 0 python3 -B - "$root" "$build_dir/build_fallback" << 'PY'
 import importlib.util, shutil, sys, types
 from pathlib import Path
@@ -511,14 +515,18 @@ src.write_text("#include <atcoder/dsu>\nint main() {}\n")
 calls = []
 def fake_run(cmd, **kw):
     calls.append(cmd)
-    if "-include" in cmd:
+    if "pch_acl.hpp" in cmd:
         return types.SimpleNamespace(returncode=1, stderr="<command-line>: fatal error: pch_acl.hpp: No such file or directory\n")
     if "-static" in cmd:
         return types.SimpleNamespace(returncode=1, stderr="/usr/bin/ld: -lc が見つかりません\ncollect2: エラー: ld はステータス 1 で終了しました\n")
     return types.SimpleNamespace(returncode=0, stderr="")
 mod.subprocess.run = fake_run
 mod.build(mod.BuildConfig(w), src, "main")
-assert len(calls) == 3 and "-include" in calls[0] and "-static" in calls[1] and "-include" not in calls[2] and "-static" not in calls[2], calls
+assert len(calls) == 3 and "pch_acl.hpp" in calls[0] and "-static" in calls[1], calls
+assert "pch_acl.hpp" not in calls[2] and "-static" not in calls[2], calls
+assert all(any(a.endswith("stress/leftover.hpp") for a in c) for c in calls), calls
+# PCH の後ろに leftover.hpp を置く
+assert calls[0].index("pch_acl.hpp") < calls[0].index(next(a for a in calls[0] if a.endswith("leftover.hpp"))), calls[0]
 PY
 
 # pch_acl.hpp 本体が無くても .gch だけで動き、フラグ不一致なら PCH なしでやり直す
@@ -548,6 +556,74 @@ g++ -std=gnu++20 -O2 -DLOCAL -Iac-library -x c++-header pch_acl.hpp -o pch_acl.h
 rm pch_acl.hpp
 check pch_match 0 env ACL_DIR="$work_p/ac-library" CP_LIBRARY_DIR="$work_p/no_lib" python3 "$root/stress.py" -n 2 --seed 1
 check pch_mismatch_fallback 0 env ACL_DIR="$work_p/ac-library" CP_LIBRARY_DIR="$work_p/no_lib" python3 "$root/stress.py" -n 2 --seed 1 --cxxflags=-O0
+
+# 入力の読み残し（stress/leftover.hpp）。まず st を通さず -include で差し込む使い方
+work_lo="$build_dir/leftover"
+rm -rf "$work_lo" && cp -r "$root/tests/leftover" "$work_lo" && cd "$work_lo"
+python3 -c "print(200000); print(' '.join(['7'] * 200000)); print('extra')" > in_big.txt
+python3 -c "print(200000); print(' '.join(['7'] * 200000))" > in_bigok.txt
+leftover_case() {  # leftover_case <名前> <プログラム> <入力> <want: yes/no> [<stderr に含まれるはずの文字列>]
+    local name="$1" exe="$2" in="$3" want="$4" pat="${5:-}" err out
+    err="$("./$exe" < "$in" 2>&1 >/dev/null)"
+    out="$("./$exe" < "$in" 2>/dev/null)"
+    if [ "$want" = yes ]; then
+        if [[ "$err" == *"[leftover] "* && "$err" == *"$pat"* && -n "$out" ]]; then echo "ok   $name"; else echo "FAIL $name (stderr: $err)"; fail=1; fi
+    else
+        if [ -z "$err" ] && [ -n "$out" ]; then echo "ok   $name"; else echo "FAIL $name (stderr: $err)"; fail=1; fi
+    fi
+}
+lo_built=1
+for p in read_cin read_fast read_scanf read_exit; do
+    g++ -std=gnu++20 -O2 -Wall -Wextra -Werror -include "$root/stress/leftover.hpp" "$p.cpp" -o "$p" 2>"$p.build.log" \
+        || { echo "FAIL leftover_build_$p"; tail -20 "$p.build.log"; fail=1; lo_built=0; }
+done
+if [ "$lo_built" -eq 1 ]; then
+    for p in read_cin read_fast read_scanf read_exit; do
+        leftover_case "leftover_${p}_multi"   "$p" in_multi.txt   yes "3 行目から（残り 1 行）: 5 3 2"
+        leftover_case "leftover_${p}_midline" "$p" in_midline.txt yes "2 行目から（残り 2 行）: 4 5 6 7 8 ..."
+        leftover_case "leftover_${p}_big"     "$p" in_big.txt     yes "3 行目から（残り 1 行）: extra"
+        leftover_case "leftover_${p}_ok"      "$p" in_ok.txt      no
+        leftover_case "leftover_${p}_bigok"   "$p" in_bigok.txt   no
+        # パイプのときは調べない（st -i の対話で止まらないように）
+        err="$(cat in_multi.txt | "./$p" 2>&1 >/dev/null)"
+        if [ -z "$err" ]; then echo "ok   leftover_${p}_pipe"; else echo "FAIL leftover_${p}_pipe ($err)"; fail=1; fi
+    done
+fi
+# PCH の後ろに差し込んでも PCH が使われる
+mkdir -p pch && printf '#include <bits/stdc++.h>\n' > pch/pch.hpp
+if g++ -std=gnu++20 -O2 -x c++-header pch/pch.hpp -o pch/pch.hpp.gch 2>/dev/null; then
+    if g++ -std=gnu++20 -O2 -Winvalid-pch -H -include pch/pch.hpp -include "$root/stress/leftover.hpp" read_cin.cpp -o read_pch 2>pch.log \
+        && grep -q '^! .*pch.hpp.gch' pch.log; then echo "ok   leftover_with_pch"; else echo "FAIL leftover_with_pch"; head -5 pch.log; fail=1; fi
+fi
+# st: main も愚直解も T を n と読み違えて OK になるが、読み残しの警告が出る
+check leftover_run 0 st -n 50 --seed 1
+log_has leftover_run_main leftover_run 'main が 50 ケース中 50 ケースで入力を読み残しています'
+log_has leftover_run_ref  leftover_run 'guchoku が 50 ケース中 50 ケースで入力を読み残しています'
+log_has leftover_run_example leftover_run '例: case=[0-9]+:1:gen  3 行目から（残り 1 行）: '
+check leftover_run_par 0 st -n 50 --seed 1 -j 3
+log_has leftover_run_par_main leftover_run_par 'main が 50 ケース中 50 ケース'
+# 例は -j でも直列と同じ（一番手前のケース）
+ex1="$(grep -E '^  例: ' "$build_dir/leftover_run.log" | head -1)"
+ex3="$(grep -E '^  例: ' "$build_dir/leftover_run_par.log" | head -1)"
+if [ -n "$ex1" ] && [ "$ex1" = "$ex3" ]; then echo "ok   leftover_run_par_example"; else echo "FAIL leftover_run_par_example ($ex1 / $ex3)"; fail=1; fi
+check leftover_clean 0 st --main main_ok.cpp --guchoku guchoku_ok.cpp -n 50 --seed 1
+log_lacks leftover_clean_msg leftover_clean '読み残し'
+check leftover_off 0 st -n 50 --seed 1 --no-leftover
+log_lacks leftover_off_msg leftover_off '読み残し'
+# checker モード（愚直解は走らない）でも main の読み残しは出る。sample の checker も T を n と読むので OK になる
+check leftover_checker 0 st -c "$root/tests/sample/checker.cpp" -n 10 --seed 1
+log_has leftover_checker_msg leftover_checker 'main が 10 ケース中 10 ケース'
+log_lacks leftover_checker_ref leftover_checker 'guchoku が'
+lo_case="$(sed -n 's/^  例: case=\([^ ]*\).*/\1/p' "$build_dir/leftover_run.log" | head -1)"
+check leftover_repro 0 st repro "$lo_case"
+log_has leftover_repro_msg leftover_repro 'main が入力を読み残しています: 3 行目から'
+# 失敗したときも警告は出る（main だけ読み違え、愚直解は正しく読む → WA）
+check leftover_wa 1 st --guchoku guchoku_ok.cpp -n 50 --seed 1 --no-to-in
+log_has leftover_wa_msg leftover_wa 'main が [0-9]+ ケース中 [0-9]+ ケースで入力を読み残しています'
+check leftover_bench 0 st bench --main main.cpp -n 1 --seed 1
+log_has leftover_bench_msg leftover_bench 'main が入力を読み残しています'
+# インタラクティブ（main の stdin はパイプ）では何も出ない
+log_lacks leftover_inter inter_ok '読み残し'
 
 # 後片付け: テストで使った各ディレクトリで st clean を呼び、/dev/shm 側の作業場所も消えることを確かめる
 clean_bad=""

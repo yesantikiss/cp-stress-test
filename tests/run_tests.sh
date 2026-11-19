@@ -337,7 +337,7 @@ int main() {
             off += static_cast<size_t>(w);
         }
     }
-    std::this_thread::sleep_for(std::chrono::seconds(10));
+    std::this_thread::sleep_for(std::chrono::seconds(20));
 }
 EOF
 # ビルドのピークメモリ（g++）が測る値に混ざらないよう、先に 1 回ビルドだけ済ませておく
@@ -347,7 +347,7 @@ import json, os, re, subprocess, sys
 from pathlib import Path
 p = subprocess.Popen([sys.executable, sys.argv[1], "-i", "interactor.cpp",
                       "--main", "main_spam_nonl.cpp", "-n", "1", "--seed", "1",
-                      "--tl", "4.0", "--no-shrink", "--no-to-in"])
+                      "--tl", "12.0", "--checker-tl", "20.0", "--no-shrink", "--no-to-in"])
 _, status, ru = os.wait4(p.pid, 0)
 p.returncode = os.waitstatus_to_exitcode(status)
 assert p.returncode == 1, f"exit {p.returncode}"

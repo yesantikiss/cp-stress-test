@@ -14,6 +14,7 @@ st -i              # interactor.cpp でインタラクティブ（docs/interacti
 st --tl 1 --san    # TL 1 秒、ASan / UBSan / _GLIBCXX_DEBUG
 st --cmp float:1e-6
 st repro SEED:CAP:NAME    # 失敗時に表示されたケースを再現
+st try                    # 手で書いた in.txt で main と愚直解を走らせて判定する
 st make max -n 5 -o cases/  # 入力ファイルだけ書き出す
 st bench max --tl 2       # 最大ケースで main の実行時間と最大メモリを測る（TLE なら終了コード 1）
 st last --to-in    # 直前の失敗を表示して in.txt にコピー
@@ -25,6 +26,7 @@ st clean           # 保存した失敗を消す
 | --- | --- |
 | `st` / `st run` | ランダムテストを回す |
 | `st repro` | 失敗したケースを 1 つ再現する |
+| `st try` | 手で書いた入力で main と愚直解を走らせて判定する |
 | `st make` | 入力ファイルだけ書き出す |
 | `st bench` | 生成した入力で main の実行時間と最大メモリを測る |
 | `st last` | 直前の失敗を表示する |
@@ -37,12 +39,13 @@ st clean           # 保存した失敗を消す
 ## 基本の流れ
 
 1. `st init` で gen.cpp を置き、入力の生成を書く（[gen.cpp の書き方](gen.md)）。
-2. main.cpp と guchoku.cpp を書いて `st`。全部一致すれば `OK  1000 cases  max 3ms` のように出る。終了時には答えとタグの分布も出る（[答えとタグの分布](#答えとタグの分布)）。
+2. main.cpp と guchoku.cpp を書いて `st`。全部一致すれば `OK  1000 cases  max main 3ms / guchoku 40ms` のように、main と愚直解それぞれの一番遅かった時間が出る（[実行時間の表示](#実行時間の表示)）。終了時には答えとタグの分布も出る（[答えとタグの分布](#答えとタグの分布)）。
 3. 失敗すると、判定、入力、両方の出力、stderr と、再現用のコマンドを出して止まる。compare モードの WA で食い違いが 20 行目より後にあるときは、食い違った行の前後 3 行も行番号と `>` 付きで追加表示する。gen がタグを付けていれば `tags:` の行も出る（[タグ](gen.md#タグ)）。失敗した入力は in.txt にも書き出す（[in.txt への書き出し](#intxt-への書き出し)）。
 
 ```text
 WA  token 1: main='5' ref='6'
 case=9473625110285193:3:random  ->  st repro 9473625110285193:3:random
+main 2ms  guchoku 15ms
 tags: str=palindrome
 ---- input ----
 ...
@@ -68,7 +71,7 @@ copied failing input -> in.txt
 | `--shrink-time SEC` | 縮小にかける時間の上限（既定 20 秒） |
 | `--no-stats` | 終了時に答えとタグの分布を出さない（[答えとタグの分布](#答えとタグの分布)） |
 
-次のオプションは `st run` と `st repro` の両方で使える。
+次のオプションは `st run` と `st repro` の両方で使える。`--no-to-in`、`--gen-tl`、`--gen-file` 以外は `st try` でも使える。
 
 | オプション | 内容 |
 | --- | --- |
@@ -89,6 +92,18 @@ copied failing input -> in.txt
 | `--san` `--cxxflags FLAGS` | [ビルド](#ビルド)の設定 |
 
 制限時間は実時間で測る。
+
+### 実行時間の表示
+
+走らせている間の行と最後の `OK` の行に、main と愚直解それぞれの一番遅かった時間を出す。失敗の表示（`st last` も）には、そのケースでの両方の時間を出す。
+
+```text
+OK  1000 cases  max main 3ms / guchoku 40ms  5.2s  base_seed=...
+```
+
+- 愚直解を走らせないとき（checker モードで `--ref` なし、`-i`）は、今までどおり `max 3ms` のように main だけ出る。
+- 失敗の表示では、main が TLE、RE、OLE なら愚直解は走らせないので main だけ出る。
+- `-j` では、ほかのプロセスと同時に動くぶん、両方とも 1 本のときより少し長めに出る。
 
 ### 実行環境
 
@@ -218,6 +233,38 @@ st repro SEED:CAP:NAME [run と同じオプション]
 - 失敗時に表示される `st repro ...` には、そのとき使ったオプションのうち既定値と違うものが付く（`-c` / `-i`、`--ref`、`--main`、`--guchoku`、`--gen-file`、`--cmp`、`--tl`、`--ref-tl`、`--checker-tl`、`--gen-tl`、`--output-limit`、`--san`、`--cxxflags`、`--no-leftover`）。なのでそのまま打てば同じ条件で再現する。
 - `st repro -c SEED:CAP:NAME` のように `-c` / `-i` の直後にケースを書くと、argparse の上ではケースが SRC として読まれる。この形（数字で始まり `:` で区切ったもの）は st がケースとして扱い直し、SRC は既定の checker.cpp / interactor.cpp にする。
 
+## st try
+
+```bash
+st try [FILE ...] [run と同じ判定のオプション]
+```
+
+手で書いた入力で main と愚直解（または checker、interactor）を走らせて判定する。FILE を省略すると in.txt を使う。gen.cpp は使わないので、無くても動く。
+
+```text
+$ st try
+build ok (0.0s)
+WA  token 1: main='22' ref='24'
+main 1ms  guchoku 1ms
+---- input ----
+6
+2 1 4 6 9 2
+---- main ----
+22
+---- guchoku ----
+24
+files: .stress/run/
+```
+
+- OK のときも `OK  main 1ms  guchoku 1ms` の行のあとに入力と出力（`-i` ならやり取り）を出す。入力の読み残しも `st run` と同じく調べて警告を出す。`-i` では main の時間とクエリの回数を出す。
+- 判定のオプション（`-c`、`--ref`、`-i`、`--cmp`、`--tl`、`--ref-tl`、`--checker-tl`、`--output-limit`、`--main`、`--guchoku`、`--no-leftover`）とビルドのオプション（`--san`、`--cxxflags`）は `st run` と同じ。`-i` のときは FILE を interactor の第 1 引数に渡す。
+- 比較モードで guchoku.cpp が無ければ、`guchoku.cpp が無いので main だけ動かす（判定はしない）` と出して main だけを走らせ、`done  main 1ms` と出力を出す。`--guchoku` で別の名前を書いたときは、無ければエラーになる。
+- 失敗しても `.stress/fail/` に保存しないし、in.txt も書き換えない。最後に走らせたファイルは `.stress/run/` に残る。
+- FILE は `.stress/run/in.txt`（直前の `st try` や `st repro` の入力）や、`st try <(printf '3\n1 2 3\n')` のようなプロセス置換でもいい。
+- FILE を複数渡すと（`st try cases/*.txt` など）1 ファイル 1 行で判定と時間を出し、失敗したものだけ、その行のすぐ後に入力と出力を出す。
+- `st try -c in.txt` のように `-c` / `-i` の直後に C++ のソース（`.cpp` `.cc` `.cxx` `.c++` `.C`）でないファイルを書くと、st はそれを FILE として扱い直し、SRC は既定の checker.cpp / interactor.cpp にする。
+- 終了コードは、全部 OK（または判定なし）なら 0、WA などがあれば 1、CHECKER_FAIL か INTERACTOR_FAIL があれば 2。
+
 ## st make
 
 ```bash
@@ -294,7 +341,7 @@ st bench [NAME ...] [-n N] [--seed S] [--cap C] [--tl SEC] [--main SRC]
 main と愚直解が入力を最後まで読まずに終わったら、警告を出す。複数テストケースの問題の gen.cpp や in.txt を使い回して、先頭の T を n と読み違えたまま OK になる、といった取り違えに気づくためのもの。判定は変えない（OK は OK のまま、止まりもしない）。
 
 ```text
-OK  1000 cases  max 3ms  2.1s  base_seed=...
+OK  1000 cases  max main 3ms / guchoku 40ms  2.1s  base_seed=...
 warning: main が 1000 ケース中 1000 ケースで入力を読み残しています
   例: case=1234567:1:gen  3 行目から（残り 1 行）: 5 3 2
 warning: guchoku が 1000 ケース中 1000 ケースで入力を読み残しています
@@ -302,7 +349,7 @@ warning: guchoku が 1000 ケース中 1000 ケースで入力を読み残して
 ```
 
 - `st run` は件数と、一番手前のケースを例として 1 つ出す（`-j` でも同じ例になる）。失敗が見つかったときも、それまでの件数を出す。
-- `st repro` と `st bench` はケースごとに出す。
+- `st repro`、`st try`、`st bench` はケースごとに出す。
 - 「答えが決まったら残りを読まずに return」する正しいコードでも出る。一部のケースだけなら、たいていそれ。全部のケースで出ていたら、読み方そのものを疑う。
 - 調べるのは main と愚直解だけ。gen、checker、interactor は調べない。`-i` では main の stdin がパイプなので、何もしない。
 - `--no-leftover` で切れる。
@@ -332,7 +379,7 @@ g++ "${CXX_FLAGS[@]}" "$SOURCE_FILE"
 `st run` が終わったとき（OK でも失敗でも）、愚直解の出力の先頭トークンの分布と `g.tag` の件数を出す。1000 ケース通ったが実は全部 `No` だった、想定していた形が出ていなかった、といった偏りに気づくためのもの。
 
 ```text
-OK  1000 cases  max 3ms  2.1s  base_seed=...
+OK  1000 cases  max main 3ms / guchoku 40ms  2.1s  base_seed=...
 答え: Yes 512 (51%), No 488 (49%)
 タグ: tree=random 298, tree=binary 144, tree=path 143, tree=star 142, tree=deep 138, tree=caterpillar 135
 ```
@@ -418,7 +465,7 @@ main、愚直解、gen、checker、interactor を並列にビルドする。フ�
 | `stderr_checker.txt` `stdout_checker.txt` | checker の出力 |
 | `transcript.txt` `stderr_interactor.txt` | インタラクティブのやり取りと interactor の stderr |
 | `tags.txt` | gen が付けたタグ（`タグ<TAB>回数` を 1 行ずつ）。タグがあるときだけ |
-| `meta.json` | 判定、理由、食い違った行番号（compare の WA のとき）、seed、cap、ジェネレーター、タグ、再現コマンド、モード、比較方法、TL、ソースのパスと SHA-1、日時 |
+| `meta.json` | 判定、理由、食い違った行番号（compare の WA のとき）、main と愚直解の実行時間（`time_main` `time_guchoku`、秒）、seed、cap、ジェネレーター、タグ、再現コマンド、モード、比較方法、TL、ソースのパスと SHA-1、日時 |
 
 st が問題のディレクトリの in.txt を書くのは、失敗したとき（`--no-to-in` でなければ）と `st last --to-in`、`st restore` のときだけ。
 
@@ -426,7 +473,7 @@ st が問題のディレクトリの in.txt を書くのは、失敗したとき
 
 | コード | 意味 |
 | --- | --- |
-| 0 | 全部 OK（`st repro` では再現しなかった） |
+| 0 | 全部 OK（`st repro` では再現しなかった、`st try` では判定なしも含む） |
 | 1 | 失敗を見つけた（`st bench` では TLE、RE、OLE があった） |
 | 2 | ビルドや引数のエラー、GEN_FAIL、CHECKER_FAIL、INTERACTOR_FAIL |
 | 130 | Ctrl+C で止めた（走っていた main なども止める。縮小中の Ctrl+C は 1） |

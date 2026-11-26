@@ -40,16 +40,22 @@ work="$build_dir/sample"
 rm -rf "$work" && cp -r "$root/tests/sample" "$work" && cd "$work"
 st() { python3 "$root/stress.py" "$@"; }
 check ok          0 st --main main_ok.cpp -n 300 --seed 1
+# 愚直解の実行時間も出る。愚直解を走らせない checker モードでは main だけ
+log_has run_ref_time ok '^OK  300 cases  max main [0-9]+ms / guchoku [0-9]+ms  '
 check wa          1 st --main main_wa.cpp --seed 1
 kind_is wa WA
 check re          1 st --main main_re.cpp --seed 2
 kind_is re RE
 check tle         1 st --main main_tle.cpp --seed 3 --tl 1
 kind_is tle TLE
+# main が TLE なら愚直解は走らないので、失敗の表示の時間は main だけ
+log_has tle_time_main_only tle '^main [0-9]+ms$'
 check checker_ok  0 st -c checker.cpp --main main_ok.cpp -n 300 --seed 5
+log_has checker_time_main_only checker_ok '^OK  300 cases  max [0-9]+ms  '
 check checker_wa  1 st -c checker.cpp --main main_wa.cpp --seed 5
 kind_is checker_wa WA
 check checker_ref 0 st -c checker.cpp --ref --main main_ok.cpp -n 100 --seed 5
+log_has checker_ref_time checker_ref 'max main [0-9]+ms / guchoku [0-9]+ms'
 check checker_default_ok 0 st -c --main main_ok.cpp -n 100 --seed 5
 check checker_default_wa 1 st --main main_wa.cpp --seed 5 -c
 check checker_default_ref 0 st -c --ref --main main_ok.cpp -n 100 --seed 5
@@ -58,6 +64,11 @@ check checker_default_ref 0 st -c --ref --main main_ok.cpp -n 100 --seed 5
 check ref_re      1 st --main main_ok.cpp --guchoku guchoku_re.cpp --seed 1
 kind_is ref_re REF_RE
 check ref_tle     1 st --main main_ok.cpp --guchoku guchoku_tle.cpp --ref-tl 0.5 --seed 1
+log_has ref_tle_time ref_tle '^main [0-9]+ms  guchoku [0-9]+ms$'
+python3 -c 'import json,sys;m=json.load(open(".stress/last/meta.json"));sys.exit(0 if m["time_guchoku"]>=0.5 and "time_main" in m else 1)' \
+    && echo "ok   ref_tle_meta_time" || { echo "FAIL ref_tle_meta_time"; fail=1; }
+check last_time 0 st last
+log_has last_time_line last_time '^main [0-9]+ms  guchoku [0-9]+ms$'
 kind_is ref_tle REF_TLE
 check gen_fail    2 st --main main_ok.cpp --gen-file gen_bad.cpp --seed 1
 log_has gen_fail_msg gen_fail '^GEN_FAIL .*distinct'
@@ -111,7 +122,7 @@ rm -f in.txt
 
 # st --help にサブコマンドの一覧が出る
 check help_subcommands 0 st --help
-for cmd in repro make bench last restore clean init; do
+for cmd in repro try make bench last restore clean init; do
     log_has "help_has_$cmd" help_subcommands "^  $cmd "
 done
 
@@ -158,6 +169,67 @@ log_has repro_checker_crash_msg repro_checker_crash '^CHECKER_FAIL '
 fail_after="$(ls -1 .stress/fail | wc -l)"
 if [ "$fail_before" -eq "$fail_after" ]; then echo "ok   repro_tool_fail_no_save"; else echo "FAIL repro_tool_fail_no_save ($fail_before -> $fail_after)"; fail=1; fi
 if cmp -s in.txt "$build_dir/in_before_tool_fail.txt"; then echo "ok   repro_tool_fail_keeps_in"; else echo "FAIL repro_tool_fail_keeps_in"; fail=1; fi
+
+# st try: 手で書いた入力で判定する。保存せず in.txt も変えない
+printf '3\n1 2 3\n' > in.txt
+cp in.txt "$build_dir/try_in_before.txt"
+printf '6\n2 1 4 6 9 2\n' > try_wa.txt
+printf '2\n5 5\n' > try_two.txt
+printf '3\n1 1 1\n' > try_three.txt
+printf '4\n1 1 1 1\n' > try_four.txt
+fail_before="$(ls -1 .stress/fail | wc -l)"
+check try_ok 0 st try --main main_ok.cpp
+log_has try_ok_line try_ok '^OK  main [0-9]+ms  guchoku [0-9]+ms$'
+log_has try_ok_shows_ref try_ok '^---- guchoku ----$'
+log_has try_ok_files try_ok '^files: \.stress/run/$'
+check try_wa 1 st try --main main_wa.cpp try_wa.txt
+log_has try_wa_line try_wa "^WA  token 1: main='22' ref='24'$"
+log_has try_wa_time try_wa '^main [0-9]+ms  guchoku [0-9]+ms$'
+check try_re 1 st try --main main_re.cpp try_four.txt
+log_has try_re_line try_re '^RE  main: '
+log_has try_re_time try_re '^main [0-9]+ms$'
+check try_tle 1 st try --main main_tle.cpp try_three.txt --tl 0.5
+log_has try_tle_line try_tle '^TLE  main exceeded 0.5s'
+check try_ref_re 1 st try --main main_ok.cpp --guchoku guchoku_re.cpp try_two.txt
+log_has try_ref_re_line try_ref_re '^REF_RE  guchoku: '
+log_has try_ref_re_time try_ref_re '^main [0-9]+ms  guchoku [0-9]+ms$'
+check try_cmp_exact 1 st try --main main_ok.cpp --cmp exact
+check try_checker 0 st try -c checker.cpp --main main_ok.cpp
+log_has try_checker_time try_checker '^OK  main [0-9]+ms$'
+check try_checker_ref 0 st try -c --ref --main main_ok.cpp
+log_has try_checker_ref_time try_checker_ref '^OK  main [0-9]+ms  guchoku [0-9]+ms$'
+# -c の直後に .cpp でないファイルを書いても入力ファイルとして扱い、checker は checker.cpp
+check try_c_swap 1 st try --main main_wa.cpp -c try_wa.txt
+log_has try_c_swap_wa try_c_swap '^WA  '
+check try_checker_crash 2 st try -c checker_crash.cpp --main main_ok.cpp try_two.txt
+log_has try_checker_crash_line try_checker_crash '^CHECKER_FAIL '
+# 複数のファイル: 1 行ずつ出し、失敗したものだけ中身を出す
+check try_multi 1 st try --main main_wa.cpp in.txt try_wa.txt try_two.txt
+log_has try_multi_ok try_multi '^in\.txt +OK  main [0-9]+ms  guchoku [0-9]+ms$'
+log_has try_multi_wa try_multi "^try_wa\.txt +WA  main [0-9]+ms  guchoku [0-9]+ms  token 1: main='22' ref='24'$"
+[ "$(grep -c '^---- input ----$' "$build_dir/try_multi.log")" -eq 1 ] && echo "ok   try_multi_one_detail" \
+    || { echo "FAIL try_multi_one_detail"; fail=1; }
+log_lacks try_multi_no_files try_multi '^files: '
+check try_multi_ok_all 0 st try --main main_ok.cpp in.txt try_two.txt
+check try_missing 2 st try --main main_ok.cpp nope.txt
+log_has try_missing_msg try_missing 'input not found: nope.txt'
+mkdir -p try_dir
+check try_dir 2 st try --main main_ok.cpp try_dir
+log_has try_dir_msg try_dir 'is a directory'
+fail_after="$(ls -1 .stress/fail | wc -l)"
+if [ "$fail_before" -eq "$fail_after" ]; then echo "ok   try_no_save"; else echo "FAIL try_no_save ($fail_before -> $fail_after)"; fail=1; fi
+if cmp -s in.txt "$build_dir/try_in_before.txt"; then echo "ok   try_keeps_in"; else echo "FAIL try_keeps_in"; fail=1; fi
+# gen.cpp が無くても動く。guchoku.cpp が無ければ main だけ動かす（--guchoku で書いた名前が無ければエラー）
+mv gen.cpp gen.cpp.away && mv guchoku.cpp guchoku.cpp.away
+check try_no_guchoku 0 st try --main main_ok.cpp
+log_has try_no_guchoku_msg try_no_guchoku 'guchoku.cpp が無いので main だけ動かす'
+log_has try_no_guchoku_line try_no_guchoku '^done  main [0-9]+ms$'
+log_lacks try_no_guchoku_ref try_no_guchoku '^---- guchoku ----$'
+check try_no_guchoku_re 1 st try --main main_re.cpp try_four.txt
+check try_guchoku_named_missing 2 st try --main main_ok.cpp --guchoku nope.cpp
+check try_no_guchoku_ref 2 st try -c --ref --main main_ok.cpp
+mv gen.cpp.away gen.cpp && mv guchoku.cpp.away guchoku.cpp
+rm -rf try_dir try_wa.txt try_two.txt try_three.txt try_four.txt
 
 # 失敗すると in.txt に自動で書き出す。手書きの in.txt だけ退避し、失敗が続いても残る
 printf 'hand written\n' > in.txt
@@ -280,6 +352,14 @@ done
 [ "$badq_ok" -eq 1 ] && echo "ok   inter_wa_then_crash_is_wa" || { echo "FAIL inter_wa_then_crash_is_wa"; tail -20 "$build_dir/inter_badquery.log"; fail=1; }
 check inter_extra   1 st -i interactor.cpp --main main_extra.cpp --seed 1
 check inter_repro   1 st repro "$(python3 -c 'import json;print(json.load(open(".stress/last/meta.json"))["case"])')" -i interactor.cpp --main main_extra.cpp
+# st try -i: 入力ファイルを interactor に渡す。main の時間とクエリの回数を出す
+echo "100 37" > try_in.txt
+check inter_try_ok 0 st try -i --main main_ok.cpp try_in.txt
+log_has inter_try_ok_line inter_try_ok '^OK  main [0-9]+ms  queries [0-9]+/25$'
+log_has inter_try_transcript inter_try_ok '^---- transcript ----'
+check inter_try_swap 1 st try -i try_in.txt --main main_wa.cpp
+log_has inter_try_swap_wa inter_try_swap '^WA  wrong answer'
+rm -f try_in.txt
 check inter_with_c  2 st -i interactor.cpp -c checker.cpp --main main_ok.cpp
 check inter_init    0 st init -i --force
 check inter_adaptive_ok    0 st -i interactor_adaptive.cpp --main main_ok.cpp -n 300 --seed 1
@@ -421,6 +501,7 @@ same_case par_same_no_shrink --main main_wa.cpp --seed 4 --no-shrink
 same_case par_same_checker -c checker.cpp --main main_wa.cpp --seed 5
 check par_ok        0 st --main main_ok.cpp -n 300 --seed 1 -j 4
 grep -q 'OK  300 cases' "$build_dir/par_ok.log" && echo "ok   par_ok_count" || { echo "FAIL par_ok_count"; fail=1; }
+log_has par_ok_ref_time par_ok 'max main [0-9]+ms / guchoku [0-9]+ms'
 check par_auto      0 st --main main_ok.cpp -n 50 --seed 1 -j
 check par_bad       2 st --main main_ok.cpp -j -1
 # -j を書かなければ STRESS_JOBS が既定。-j を書けばそちらが優先。サブコマンドにも影響しない
@@ -921,6 +1002,10 @@ check leftover_wa 1 st --guchoku guchoku_ok.cpp -n 50 --seed 1 --no-to-in
 log_has leftover_wa_msg leftover_wa 'main が [0-9]+ ケース中 [0-9]+ ケースで入力を読み残しています'
 check leftover_bench 0 st bench --main main.cpp -n 1 --seed 1
 log_has leftover_bench_msg leftover_bench 'main が入力を読み残しています'
+check leftover_try 0 st try in_multi.txt
+log_has leftover_try_msg leftover_try 'main が入力を読み残しています'
+check leftover_try_off 0 st try in_multi.txt --no-leftover
+log_lacks leftover_try_off_msg leftover_try_off '読み残し'
 # インタラクティブ（main の stdin はパイプ）では何も出ない
 log_lacks leftover_inter inter_ok '読み残し'
 log_lacks stats_inter_no_ans inter_ok '答え（先頭トークン）|^答え:'

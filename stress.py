@@ -540,6 +540,7 @@ class Verdict:
     kind: str          # OK / WA / RE / TLE / OLE / REF_RE / REF_TLE / REF_OLE / CHECKER_FAIL / INTERACTOR_FAIL / GEN_FAIL
     detail: str = ""
     elapsed: float = 0.0
+    ref_elapsed: float | None = None  # 愚直解の実行時間（走らせたときだけ）
     queries: tuple[int, int] | None = None  # インタラクティブ: (使った回数, 制限 or -1)
     leftover: dict[str, str] = field(default_factory=dict)  # 入力を読み残したプログラム -> "3 行目から（残り 1 行）: 5 3 2"
     diff_lines: tuple[int, int] | None = None  # compare の WA で最初に食い違った 1 始まりの行番号 (main, guchoku)
@@ -549,7 +550,7 @@ class Verdict:
 
 @dataclass
 class Programs:
-    gen: Path
+    gen: Path | None  # st try では使わない
     main: Path | None
     ref: Path | None
     checker: Path | None
@@ -740,9 +741,14 @@ def read_leftover(d: Path) -> dict[str, str]:
 
 def _run_case(progs: Programs, case: Case, d: Path, opt: argparse.Namespace) -> Verdict:
     fresh_dir(d)
-    inp = d / "in.txt"
     if (bad := generate(progs, case, d, opt)) is not None:
         return bad
+    return judge_input(progs, d, opt)
+
+
+def judge_input(progs: Programs, d: Path, opt: argparse.Namespace) -> Verdict:
+    """d/in.txt を入力にして main（と愚直解、checker / interactor）を走らせ、判定する。"""
+    inp = d / "in.txt"
     if progs.interactor:
         return run_interactive(progs, d, opt)
 
@@ -754,15 +760,19 @@ def _run_case(progs: Programs, case: Case, d: Path, opt: argparse.Namespace) -> 
     if m.status == "RE":
         return Verdict("RE", f"main: {describe_code(m.code)}", m.elapsed)
 
+    ref_time = None
     if progs.ref:
         r = run(progs.ref, inp, d / "out_ref.txt", d / "stderr_ref.txt", opt.ref_tl, d,
                 output_mb=opt.output_limit)
+        ref_time = r.elapsed
         if r.status == "TLE":
-            return Verdict("REF_TLE", f"guchoku exceeded {opt.ref_tl}s", m.elapsed)
+            return Verdict("REF_TLE", f"guchoku exceeded {opt.ref_tl}s", m.elapsed, ref_time)
         if r.status == "OLE":
-            return Verdict("REF_OLE", f"guchoku output exceeded {opt.output_limit:g} MB", m.elapsed)
+            return Verdict("REF_OLE", f"guchoku output exceeded {opt.output_limit:g} MB", m.elapsed, ref_time)
         if r.status == "RE":
-            return Verdict("REF_RE", f"guchoku: {describe_code(r.code)}", m.elapsed)
+            return Verdict("REF_RE", f"guchoku: {describe_code(r.code)}", m.elapsed, ref_time)
+    elif not progs.checker:
+        return Verdict("NO_JUDGE", "", m.elapsed)  # st try で愚直解が無いとき: main を動かしただけ
 
     first_tok = read_first_token(d / "out_ref.txt") if progs.ref and getattr(opt, "stats", True) else None
 
@@ -773,17 +783,17 @@ def _run_case(progs: Programs, case: Case, d: Path, opt: argparse.Namespace) -> 
         c = run(progs.checker, None, d / "stdout_checker.txt", d / "stderr_checker.txt", opt.checker_tl, d, args)
         msg = (d / "stderr_checker.txt").read_text(errors="replace").strip()
         if c.status == "OK":
-            return Verdict("OK", "", m.elapsed, first_token=first_tok)
+            return Verdict("OK", "", m.elapsed, ref_time, first_token=first_tok)
         if c.status == "TLE" or c.code != 1:
             # 0 と 1 以外（3、ほかの値、例外やシグナルで落ちた、TL 超え）は checker 自身の失敗
             what = f"checker exceeded {opt.checker_tl}s" if c.status == "TLE" else describe_code(c.code)
-            return Verdict("CHECKER_FAIL", f"{what} {msg}".strip(), m.elapsed, first_token=first_tok)
+            return Verdict("CHECKER_FAIL", f"{what} {msg}".strip(), m.elapsed, ref_time, first_token=first_tok)
         if msg.startswith("WA: "):
             msg = msg[4:]
-        return Verdict("WA", msg or f"checker {describe_code(c.code)}", m.elapsed, first_token=first_tok)
+        return Verdict("WA", msg or f"checker {describe_code(c.code)}", m.elapsed, ref_time, first_token=first_tok)
 
     ok, why, diff_lines = compare((d / "out_main.txt").read_bytes(), (d / "out_ref.txt").read_bytes(), opt.cmp)
-    return Verdict("OK" if ok else "WA", why, m.elapsed, diff_lines=diff_lines, first_token=first_tok)
+    return Verdict("OK" if ok else "WA", why, m.elapsed, ref_time, diff_lines=diff_lines, first_token=first_tok)
 
 
 # ---------------------------------------------------------------- インタラクティブ
@@ -1075,6 +1085,9 @@ def save_failure(workdir: Path, run_dir: Path, case: Case, v: Verdict, opt: argp
     }
     if v.diff_lines is not None:
         meta["diff_lines"] = list(v.diff_lines)
+    meta["time_main"] = round(v.elapsed, 4)
+    if v.ref_elapsed is not None:
+        meta["time_guchoku"] = round(v.ref_elapsed, 4)
     (dest / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False) + "\n")
     last = workdir / ".stress" / "last"
     if last.is_symlink() or last.exists():
@@ -1167,10 +1180,34 @@ def head_tail(path: Path, lines: int = HEAD_LINES, width: int = 200) -> str:
     return "\n".join(cut[:lines] + [Out.dim(f"... ({len(text) - 2 * lines} lines) ...")] + cut[-lines:])
 
 
+def fmt_ms(sec: float) -> str:
+    return f"{sec * 1000:.0f}ms"
+
+
+def fmt_times(v: Verdict) -> str:
+    """'main 12ms  guchoku 340ms'。愚直解を走らせていなければ main だけ。"""
+    s = f"main {fmt_ms(v.elapsed)}"
+    if v.ref_elapsed is not None:
+        s += f"  guchoku {fmt_ms(v.ref_elapsed)}"
+    return s
+
+
 def show_failure(d: Path, v: Verdict, case_id: str, repro: str, workdir: Path) -> None:
     Out.log()
     Out.log(Out.red(f"{v.kind}") + f"  {v.detail}")
     Out.log(Out.dim(f"case={case_id}  ->  {repro}"))
+    if v.kind not in TOOL_FAILURES:
+        Out.log(Out.dim(fmt_times(v)))
+    show_case_files(d, v)
+    try:
+        rel = d.relative_to(workdir)
+    except ValueError:
+        rel = d
+    Out.log(Out.dim(f"saved: {rel}"))
+
+
+def show_case_files(d: Path, v: Verdict) -> None:
+    """タグ、入力、出力（またはやり取り）、WA の前後、stderr を出す。"""
     if tags := read_tags(d):
         Out.log("tags: " + ", ".join(tags))
     Out.log(Out.yellow("---- input ----"))
@@ -1197,11 +1234,6 @@ def show_failure(d: Path, v: Verdict, case_id: str, repro: str, workdir: Path) -
         if p.exists() and p.stat().st_size:
             Out.log(Out.yellow(f"---- {name} ----"))
             Out.log(head(p, 15))
-    try:
-        rel = d.relative_to(workdir)
-    except ValueError:
-        rel = d
-    Out.log(Out.dim(f"saved: {rel}"))
 
 
 # ---------------------------------------------------------------- in.txt への書き出し
@@ -1528,7 +1560,13 @@ def find_source(workdir: Path, name: str, what: str) -> Path:
     return p
 
 
-def prepare(opt: argparse.Namespace, workdir: Path, need: set[str]) -> tuple[Programs, dict[str, Path]]:
+def prepare(opt: argparse.Namespace, workdir: Path, need: set[str], use_gen: bool = True,
+            optional_ref: bool = False) -> tuple[Programs, dict[str, Path]]:
+    """need: "main"（解答）と "judge"（愚直解 / checker / interactor）のどれを使うか。
+
+    use_gen=False なら gen をビルドしない。optional_ref=True なら、比較モードで愚直解が既定の名前で
+    見つからないとき、エラーにせず愚直解なしで進める（st try 用）。
+    """
     raw_flags = getattr(opt, "cxxflags", "")
     try:
         extra = shlex.split(raw_flags) if raw_flags else []
@@ -1536,7 +1574,9 @@ def prepare(opt: argparse.Namespace, workdir: Path, need: set[str]) -> tuple[Pro
         die(f"invalid --cxxflags: {e}")
     cfg = BuildConfig(workdir, sanitize=getattr(opt, "san", False), extra=extra,
                       leftover=getattr(opt, "leftover", True))
-    sources = {"gen": find_source(workdir, opt.gen_file, "generator")}
+    sources: dict[str, Path] = {}
+    if use_gen:
+        sources["gen"] = find_source(workdir, opt.gen_file, "generator")
     if "main" in need:
         sources["main"] = find_source(workdir, opt.main, "solution")
     if "judge" in need:
@@ -1546,6 +1586,8 @@ def prepare(opt: argparse.Namespace, workdir: Path, need: set[str]) -> tuple[Pro
             sources["checker"] = find_source(workdir, opt.checker, "checker")
             if opt.ref:
                 sources["ref"] = find_source(workdir, opt.guchoku, "reference (guchoku)")
+        elif optional_ref and opt.guchoku == "guchoku.cpp" and not (workdir / opt.guchoku).exists():
+            Out.log(Out.dim("guchoku.cpp が無いので main だけ動かす（判定はしない）"))
         else:
             sources["ref"] = find_source(workdir, opt.guchoku, "reference (guchoku)")
 
@@ -1560,6 +1602,9 @@ def prepare(opt: argparse.Namespace, workdir: Path, need: set[str]) -> tuple[Pro
         sys.exit(EXIT_ERROR)
     Out.clear_status()
     Out.log(Out.dim(f"build ok ({time.perf_counter() - t0:.1f}s)"))
+    if not use_gen:
+        return Programs(gen=None, main=exes.get("main"), ref=exes.get("ref"), checker=exes.get("checker"),
+                        interactor=exes.get("interactor")), sources
 
     listed = subprocess.run([str(exes["gen"]), "--list"], capture_output=True, text=True, cwd=workdir)
     if listed.returncode != 0:
@@ -1667,25 +1712,33 @@ def cmd_run(opt: argparse.Namespace) -> int:
                     + (f" jobs={jobs}" if jobs > 1 else "")))
 
     slowest = 0.0
+    slowest_ref: float | None = None
     most_queries: tuple[int, int] | None = None
     n_done = 0
     last_status = 0.0
     leftover = LeftoverStats()
     stats = RunStats()
 
+    def fmt_max() -> str:
+        if slowest_ref is None:
+            return f"max {fmt_ms(slowest)}"
+        return f"max main {fmt_ms(slowest)} / guchoku {fmt_ms(slowest_ref)}"
+
     def on_result(idx: int, case: Case, v: Verdict) -> None:
-        nonlocal slowest, most_queries, n_done, last_status
+        nonlocal slowest, slowest_ref, most_queries, n_done, last_status
         leftover.add(idx, case, v)
         if opt.stats:
             stats.add(v)
         slowest = max(slowest, v.elapsed)
+        if v.ref_elapsed is not None:
+            slowest_ref = v.ref_elapsed if slowest_ref is None else max(slowest_ref, v.ref_elapsed)
         if v.queries and (most_queries is None or v.queries[0] > most_queries[0]):
             most_queries = v.queries
         n_done += 1
         now = time.monotonic()
         if now - last_status > 0.1:
             prog = f"{n_done}/{stream.total}" if stream.total else f"{n_done}"
-            Out.status(f"[{prog}] cap={case.cap} OK  max {slowest * 1000:.0f}ms{fmt_queries(most_queries)}"
+            Out.status(f"[{prog}] cap={case.cap} OK  {fmt_max()}{fmt_queries(most_queries)}"
                        f"  {now - start:.1f}s")
             last_status = now
 
@@ -1694,7 +1747,7 @@ def cmd_run(opt: argparse.Namespace) -> int:
         found = runner.search(stream, lambda v: v.kind != "OK", on_result)
         if found is None:
             Out.clear_status()
-            Out.log(Out.green("OK") + f"  {n_done} cases  max {slowest * 1000:.0f}ms{fmt_queries(most_queries)}"
+            Out.log(Out.green("OK") + f"  {n_done} cases  {fmt_max()}{fmt_queries(most_queries)}"
                     f"  {time.monotonic() - start:.1f}s"
                     + Out.dim(f"  base_seed={base}"))
             leftover.report(n_done)
@@ -1881,6 +1934,61 @@ def cmd_repro(opt: argparse.Namespace) -> int:
     return EXIT_FOUND
 
 
+TRY_OK = ("OK", "NO_JUDGE")
+
+
+def try_label(v: Verdict) -> str:
+    if v.kind == "OK":
+        return Out.green("OK")
+    if v.kind == "NO_JUDGE":
+        return "done"
+    return Out.red(v.kind)
+
+
+def cmd_try(opt: argparse.Namespace) -> int:
+    check_mode(opt)
+    workdir = Path.cwd()
+    files = [Path(f) for f in (opt.files or ["in.txt"])]
+    for f in files:
+        p = workdir / f
+        if p.is_dir():
+            die(f"{f} is a directory (st try {f}/*.txt のようにファイルを渡す)")
+        if not p.is_file():
+            die(f"input not found: {f}")
+    progs, _ = prepare(opt, workdir, {"main", "judge"}, use_gen=False, optional_ref=True)
+    run_dir = work_root(workdir)
+    single = len(files) == 1
+    width = max(len(str(f)) for f in files)
+    code = EXIT_OK
+    for f in files:
+        fresh_dir(run_dir)
+        shutil.copyfile(workdir / f, run_dir / "in.txt")
+        v = judge_input(progs, run_dir, opt)
+        v.leftover = read_leftover(run_dir)
+        times = "" if v.kind in TOOL_FAILURES else fmt_times(v)
+        if times and v.queries:
+            times += f"  queries {v.queries[0]}" + (f"/{v.queries[1]}" if v.queries[1] >= 0 else "")
+        if single:
+            if v.kind in TRY_OK:
+                Out.log(try_label(v) + f"  {times}")
+            else:
+                Out.log(try_label(v) + f"  {v.detail}")
+                if times:
+                    Out.log(Out.dim(times))
+        else:
+            Out.log(f"{str(f):<{width}}  {try_label(v)}  {times}" + (f"  {v.detail}" if v.detail else ""))
+        if single or v.kind not in TRY_OK:
+            show_case_files(run_dir, v)
+        report_leftover(v)
+        if v.kind in TOOL_FAILURES:
+            code = EXIT_ERROR
+        elif v.kind not in TRY_OK and code == EXIT_OK:
+            code = EXIT_FOUND
+    if single:
+        Out.log(Out.dim("files: .stress/run/"))
+    return code
+
+
 def make_cases(opt: argparse.Namespace, progs: Programs) -> list[Case]:
     gens = select_gens(progs, opt.names, big=True)
     base = opt.seed if opt.seed is not None else int.from_bytes(os.urandom(8), "little")
@@ -1972,7 +2080,8 @@ def cmd_last(opt: argparse.Namespace) -> int:
     meta = json.loads((last / "meta.json").read_text())
     dl = meta.get("diff_lines")
     diff_lines = (int(dl[0]), int(dl[1])) if isinstance(dl, list) and len(dl) == 2 else None
-    v = Verdict(meta["kind"], meta.get("detail", ""), diff_lines=diff_lines)
+    v = Verdict(meta["kind"], meta.get("detail", ""), float(meta.get("time_main", 0.0)),
+                meta.get("time_guchoku"), diff_lines=diff_lines)
     case_id = meta.get("case", f"{meta['seed']}:{meta['cap']}")
     show_failure(last.resolve(), v, case_id, meta.get("repro", f"st repro {case_id}"), workdir)
     if opt.to_in:
@@ -2052,15 +2161,25 @@ def positive_int(s: str) -> int:
     return v
 
 
-def add_build(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--gen-file", default="gen.cpp", help="ジェネレータのソース (default: gen.cpp)")
+def add_compile(p: argparse.ArgumentParser) -> None:
     p.add_argument("--san", action="store_true", help="AddressSanitizer / UBSan / _GLIBCXX_DEBUG でビルド")
     p.add_argument("--cxxflags", default=os.environ.get("STRESS_CXXFLAGS", ""), help="追加のコンパイルフラグ")
+
+
+def add_build(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--gen-file", default="gen.cpp", help="ジェネレータのソース (default: gen.cpp)")
+    add_compile(p)
     p.add_argument("--gen-tl", type=positive_float, default=10.0, help="gen の制限時間 [s] (default: 10)")
 
 
 def add_common(p: argparse.ArgumentParser) -> None:
     add_build(p)
+    add_judge(p)
+    p.add_argument("--no-to-in", dest="to_in", action="store_false",
+                   help="失敗した入力を in.txt にコピーしない（既定ではコピーする）")
+
+
+def add_judge(p: argparse.ArgumentParser) -> None:
     p.add_argument("--main", default="main.cpp", help="解答 (default: main.cpp)")
     p.add_argument("--guchoku", default="guchoku.cpp", help="愚直解 (default: guchoku.cpp)")
     p.add_argument("-c", "--checker", metavar="SRC", nargs="?", const="checker.cpp",
@@ -2073,8 +2192,6 @@ def add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--checker-tl", type=positive_float, default=10.0, help="checker / interactor の制限時間 [s] (default: 10)")
     add_output_limit(p)
     p.add_argument("--cmp", default=None, help="比較方法: token (default) / exact / float[:EPS]")
-    p.add_argument("--no-to-in", dest="to_in", action="store_false",
-                   help="失敗した入力を in.txt にコピーしない（既定ではコピーする）")
     add_no_leftover(p)
 
 
@@ -2096,7 +2213,7 @@ def add_cases(p: argparse.ArgumentParser, count: int) -> None:
 
 
 def parse(argv: list[str]) -> argparse.Namespace:
-    commands = {"run", "repro", "make", "bench", "last", "restore", "clean", "init"}
+    commands = {"run", "repro", "try", "make", "bench", "last", "restore", "clean", "init"}
     if not argv or argv[0] not in commands:
         argv = ["run", *argv]
 
@@ -2106,6 +2223,7 @@ def parse(argv: list[str]) -> argparse.Namespace:
     run_epilog = "\n".join([
         "サブコマンド (st <コマンド> --help で詳細):",
         "  repro     SEED:CAP:NAME のケースを 1 つ再現する",
+        "  try       手で書いた入力（既定は in.txt）で main と愚直解を走らせて判定する",
         "  make      入力ファイルだけ書き出す",
         "  bench     生成した入力で main の実行時間と最大メモリを測る",
         "  last      直前の失敗を表示する",
@@ -2135,6 +2253,12 @@ def parse(argv: list[str]) -> argparse.Namespace:
     p = p_repro = sub.add_parser("repro", help="SEED:CAP:NAME のケースを 1 つ再現する")
     add_common(p)
     p.add_argument("case", nargs="?", help="SEED:CAP:NAME（失敗時に表示されるもの）")
+
+    p = p_try = sub.add_parser("try", help="手で書いた入力（既定は in.txt）で main と愚直解を走らせて判定する")
+    add_compile(p)
+    add_judge(p)
+    p.add_argument("files", nargs="*", metavar="FILE",
+                   help="入力ファイル（複数可。省略時は in.txt）。guchoku.cpp が無ければ main だけ動かす")
 
     p = sub.add_parser("make", help="入力ファイルだけ書き出す")
     add_build(p)
@@ -2175,7 +2299,17 @@ def parse(argv: list[str]) -> argparse.Namespace:
                 break
         else:
             p_repro.error("the following arguments are required: case")
+    if opt.command == "try":
+        # st try -c in.txt と書くと、-c が入力ファイルを SRC として取ってしまう
+        for attr, default in (("checker", "checker.cpp"), ("interactor", "interactor.cpp")):
+            v = getattr(opt, attr)
+            if v and Path(v).suffix not in CXX_SUFFIXES:
+                opt.files.insert(0, v)
+                setattr(opt, attr, default)
     return opt
+
+
+CXX_SUFFIXES = {".cpp", ".cc", ".cxx", ".c++", ".C"}
 
 
 # gen と interactor に渡すファイル名。子プロセスは作業ディレクトリ（ケースごとの d）で動くので相対パスで足りる。
@@ -2186,7 +2320,7 @@ CHILD_ENV = {"STRESS_TAGS": "tags.txt", "STRESS_REPORT": "report_interactor.txt"
 def main(argv: list[str]) -> int:
     opt = parse(argv)
     os.environ.update(CHILD_ENV)
-    handler = {"run": cmd_run, "repro": cmd_repro, "make": cmd_make, "bench": cmd_bench,
+    handler = {"run": cmd_run, "repro": cmd_repro, "try": cmd_try, "make": cmd_make, "bench": cmd_bench,
                "last": cmd_last, "restore": cmd_restore, "clean": cmd_clean, "init": cmd_init}
     try:
         return handler[opt.command](opt)

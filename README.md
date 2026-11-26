@@ -55,6 +55,7 @@ mode=compare/token gens=random base_seed=1 tl=2.0s
 
 WA  token 1: main='0' ref='17'
 case=10451216379200822465:1:random  ->  st repro 10451216379200822465:1:random
+main 1ms  guchoku 1ms
 ---- input ----
 1
 17

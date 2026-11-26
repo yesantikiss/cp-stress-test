@@ -12,6 +12,7 @@
   st -i                   # インタラクティブ（interactor.cpp。別名なら -i foo.cpp）
   st -g max -g all_same  # STRESS_GEN の生成器を絞る
   st repro 12345:7:gen    # 失敗ケースを 1 つ再現（seed:cap:生成器）
+  st try [FILE ...]       # 手で書いた入力（既定は in.txt）で判定する
   st make max -n 5 -o cases/   # 入力ファイルだけ書き出す
   st bench max            # 最大ケースで main の実行時間と最大メモリを測る
   st last [--to-in]       # 直前の失敗を表示（in.txt へコピー）
@@ -1192,11 +1193,12 @@ def fmt_times(v: Verdict) -> str:
     return s
 
 
-def show_failure(d: Path, v: Verdict, case_id: str, repro: str, workdir: Path) -> None:
+def show_failure(d: Path, v: Verdict, case_id: str, repro: str, workdir: Path, times: bool = True) -> None:
+    """times=False なら時間の行を出さない（時間を記録していない古い meta.json の st last）。"""
     Out.log()
     Out.log(Out.red(f"{v.kind}") + f"  {v.detail}")
     Out.log(Out.dim(f"case={case_id}  ->  {repro}"))
-    if v.kind not in TOOL_FAILURES:
+    if times and v.kind not in TOOL_FAILURES:
         Out.log(Out.dim(fmt_times(v)))
     show_case_files(d, v)
     try:
@@ -1953,16 +1955,19 @@ def cmd_try(opt: argparse.Namespace) -> int:
         p = workdir / f
         if p.is_dir():
             die(f"{f} is a directory (st try {f}/*.txt のようにファイルを渡す)")
-        if not p.is_file():
+        if not p.exists():
             die(f"input not found: {f}")
+    # .stress/run/in.txt を渡されても work_root / fresh_dir で消える前に読めるよう、先に全部読んでおく。
+    # 通常のファイルでないもの（<(...) のプロセス置換など）も 1 回しか読めないので、ここで読む。
+    datas = [(workdir / f).read_bytes() for f in files]
     progs, _ = prepare(opt, workdir, {"main", "judge"}, use_gen=False, optional_ref=True)
     run_dir = work_root(workdir)
     single = len(files) == 1
     width = max(len(str(f)) for f in files)
     code = EXIT_OK
-    for f in files:
+    for f, data in zip(files, datas):
         fresh_dir(run_dir)
-        shutil.copyfile(workdir / f, run_dir / "in.txt")
+        (run_dir / "in.txt").write_bytes(data)
         v = judge_input(progs, run_dir, opt)
         v.leftover = read_leftover(run_dir)
         times = "" if v.kind in TOOL_FAILURES else fmt_times(v)
@@ -1976,7 +1981,7 @@ def cmd_try(opt: argparse.Namespace) -> int:
                 if times:
                     Out.log(Out.dim(times))
         else:
-            Out.log(f"{str(f):<{width}}  {try_label(v)}  {times}" + (f"  {v.detail}" if v.detail else ""))
+            Out.log("  ".join(x for x in (f"{str(f):<{width}}", try_label(v), times, v.detail) if x))
         if single or v.kind not in TRY_OK:
             show_case_files(run_dir, v)
         report_leftover(v)
@@ -2080,10 +2085,12 @@ def cmd_last(opt: argparse.Namespace) -> int:
     meta = json.loads((last / "meta.json").read_text())
     dl = meta.get("diff_lines")
     diff_lines = (int(dl[0]), int(dl[1])) if isinstance(dl, list) and len(dl) == 2 else None
+    tg = meta.get("time_guchoku")
     v = Verdict(meta["kind"], meta.get("detail", ""), float(meta.get("time_main", 0.0)),
-                meta.get("time_guchoku"), diff_lines=diff_lines)
+                float(tg) if tg is not None else None, diff_lines=diff_lines)
     case_id = meta.get("case", f"{meta['seed']}:{meta['cap']}")
-    show_failure(last.resolve(), v, case_id, meta.get("repro", f"st repro {case_id}"), workdir)
+    show_failure(last.resolve(), v, case_id, meta.get("repro", f"st repro {case_id}"), workdir,
+                 times="time_main" in meta)
     if opt.to_in:
         copy_to_in(workdir, last / "in.txt")
     return EXIT_OK
@@ -2304,8 +2311,16 @@ def parse(argv: list[str]) -> argparse.Namespace:
         for attr, default in (("checker", "checker.cpp"), ("interactor", "interactor.cpp")):
             v = getattr(opt, attr)
             if v and Path(v).suffix not in CXX_SUFFIXES:
-                opt.files.insert(0, v)
+                opt.files.append(v)
                 setattr(opt, attr, default)
+        # 書いた順に並べ直す（st try a.txt -c b.txt なら a.txt, b.txt）
+        rest = list(opt.files)
+        ordered = []
+        for tok in argv:
+            if tok in rest:
+                rest.remove(tok)
+                ordered.append(tok)
+        opt.files = ordered + rest
     return opt
 
 

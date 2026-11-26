@@ -69,6 +69,12 @@ python3 -c 'import json,sys;m=json.load(open(".stress/last/meta.json"));sys.exit
     && echo "ok   ref_tle_meta_time" || { echo "FAIL ref_tle_meta_time"; fail=1; }
 check last_time 0 st last
 log_has last_time_line last_time '^main [0-9]+ms  guchoku [0-9]+ms$'
+# 時間を記録していない古い meta.json では時間の行を出さない
+cp .stress/last/meta.json "$build_dir/meta_with_time.json"
+python3 -c 'import json;p=".stress/last/meta.json";m=json.load(open(p));m.pop("time_main");m.pop("time_guchoku");json.dump(m,open(p,"w"))'
+check last_old_meta 0 st last
+log_lacks last_old_meta_no_time last_old_meta '^main [0-9]+ms'
+cp "$build_dir/meta_with_time.json" .stress/last/meta.json
 kind_is ref_tle REF_TLE
 check gen_fail    2 st --main main_ok.cpp --gen-file gen_bad.cpp --seed 1
 log_has gen_fail_msg gen_fail '^GEN_FAIL .*distinct'
@@ -211,6 +217,18 @@ log_has try_multi_wa try_multi "^try_wa\.txt +WA  main [0-9]+ms  guchoku [0-9]+m
     || { echo "FAIL try_multi_one_detail"; fail=1; }
 log_lacks try_multi_no_files try_multi '^files: '
 check try_multi_ok_all 0 st try --main main_ok.cpp in.txt try_two.txt
+# -c の後ろの入力ファイルも書いた順に走らせる。CHECKER_FAIL の行は間が 2 つの空白
+check try_c_swap_order 0 st try --main main_ok.cpp in.txt -c try_two.txt
+grep -E '^(in|try_two)\.txt ' "$build_dir/try_c_swap_order.log" | cut -d' ' -f1 | tr '\n' ' ' | grep -qx 'in.txt try_two.txt ' \
+    && echo "ok   try_c_swap_order_kept" || { echo "FAIL try_c_swap_order_kept"; cat "$build_dir/try_c_swap_order.log"; fail=1; }
+check try_multi_tool_fail 2 st try -c checker_crash.cpp --main main_ok.cpp in.txt try_two.txt
+log_has try_multi_tool_fail_spacing try_multi_tool_fail '^try_two\.txt  CHECKER_FAIL  [^ ]'
+# 直前の入力（.stress/run/in.txt）とプロセス置換も渡せる
+check try_rerun_run_dir 1 st try --main main_wa.cpp try_wa.txt
+check try_rerun_run_dir2 1 st try --main main_wa.cpp .stress/run/in.txt
+log_has try_rerun_run_dir_wa try_rerun_run_dir2 "^WA  token 1: main='22' ref='24'$"
+check try_proc_subst 0 bash -c "python3 '$root/stress.py' try --main main_ok.cpp <(printf '2\n5 5\n')"
+log_has try_proc_subst_ok try_proc_subst '^OK  main [0-9]+ms  guchoku [0-9]+ms$'
 check try_missing 2 st try --main main_ok.cpp nope.txt
 log_has try_missing_msg try_missing 'input not found: nope.txt'
 mkdir -p try_dir

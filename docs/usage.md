@@ -260,6 +260,7 @@ files: .stress/run/
 - 判定のオプション（`-c`、`--ref`、`-i`、`--cmp`、`--tl`、`--ref-tl`、`--checker-tl`、`--output-limit`、`--main`、`--guchoku`、`--no-leftover`）とビルドのオプション（`--san`、`--cxxflags`）は `st run` と同じ。`-i` のときは FILE を interactor の第 1 引数に渡す。
 - 比較モードで guchoku.cpp が無ければ、`guchoku.cpp が無いので main だけ動かす（判定はしない）` と出して main だけを走らせ、`done  main 1ms` と出力を出す。`--guchoku` で別の名前を書いたときは、無ければエラーになる。
 - 失敗しても `.stress/fail/` に保存しないし、in.txt も書き換えない。最後に走らせたファイルは `.stress/run/` に残る。
+- FILE は `.stress/run/in.txt`（直前の `st try` や `st repro` の入力）や、`st try <(printf '3\n1 2 3\n')` のようなプロセス置換でもいい。
 - FILE を複数渡すと（`st try cases/*.txt` など）1 ファイル 1 行で判定と時間を出し、失敗したものだけ、その行のすぐ後に入力と出力を出す。
 - `st try -c in.txt` のように `-c` / `-i` の直後に C++ のソース（`.cpp` `.cc` `.cxx` `.c++` `.C`）でないファイルを書くと、st はそれを FILE として扱い直し、SRC は既定の checker.cpp / interactor.cpp にする。
 - 終了コードは、全部 OK（または判定なし）なら 0、WA などがあれば 1、CHECKER_FAIL か INTERACTOR_FAIL があれば 2。
@@ -340,7 +341,7 @@ st bench [NAME ...] [-n N] [--seed S] [--cap C] [--tl SEC] [--main SRC]
 main と愚直解が入力を最後まで読まずに終わったら、警告を出す。複数テストケースの問題の gen.cpp や in.txt を使い回して、先頭の T を n と読み違えたまま OK になる、といった取り違えに気づくためのもの。判定は変えない（OK は OK のまま、止まりもしない）。
 
 ```text
-OK  1000 cases  max 3ms  2.1s  base_seed=...
+OK  1000 cases  max main 3ms / guchoku 40ms  2.1s  base_seed=...
 warning: main が 1000 ケース中 1000 ケースで入力を読み残しています
   例: case=1234567:1:gen  3 行目から（残り 1 行）: 5 3 2
 warning: guchoku が 1000 ケース中 1000 ケースで入力を読み残しています
@@ -348,7 +349,7 @@ warning: guchoku が 1000 ケース中 1000 ケースで入力を読み残して
 ```
 
 - `st run` は件数と、一番手前のケースを例として 1 つ出す（`-j` でも同じ例になる）。失敗が見つかったときも、それまでの件数を出す。
-- `st repro` と `st bench` はケースごとに出す。
+- `st repro`、`st try`、`st bench` はケースごとに出す。
 - 「答えが決まったら残りを読まずに return」する正しいコードでも出る。一部のケースだけなら、たいていそれ。全部のケースで出ていたら、読み方そのものを疑う。
 - 調べるのは main と愚直解だけ。gen、checker、interactor は調べない。`-i` では main の stdin がパイプなので、何もしない。
 - `--no-leftover` で切れる。
@@ -378,7 +379,7 @@ g++ "${CXX_FLAGS[@]}" "$SOURCE_FILE"
 `st run` が終わったとき（OK でも失敗でも）、愚直解の出力の先頭トークンの分布と `g.tag` の件数を出す。1000 ケース通ったが実は全部 `No` だった、想定していた形が出ていなかった、といった偏りに気づくためのもの。
 
 ```text
-OK  1000 cases  max 3ms  2.1s  base_seed=...
+OK  1000 cases  max main 3ms / guchoku 40ms  2.1s  base_seed=...
 答え: Yes 512 (51%), No 488 (49%)
 タグ: tree=random 298, tree=binary 144, tree=path 143, tree=star 142, tree=deep 138, tree=caterpillar 135
 ```
